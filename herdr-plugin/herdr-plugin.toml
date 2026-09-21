@@ -1,0 +1,75 @@
+# skram herdr plugin. Put this file in a directory and link it:
+#   herdr plugin link /path/to/that/directory
+# Commands run `skram` by name: the binary must be on PATH for herdr
+# (`skram doctor` checks). Bind a key with
+#   [[keys.command]]
+#   key = "prefix+shift+s"
+#   type = "plugin_action"
+#   command = "skram.open-tui"
+# (likewise prefix+alt+k -> skram.kill-current, prefix+alt+d -> skram.queue-drain)
+# and show the running job per workspace with a $skram row (see README).
+
+id = "skram"
+name = "skram"
+version = "0.8.5"
+min_herdr_version = "0.9.0"
+description = "Shared-resource job queue: popup TUI, status, logs, kill, drain"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "tui"
+title = "skram"
+placement = "popup"
+width = "80%"
+height = "60%"
+command = ["skram", "tui"]
+
+[[panes]]
+id = "status"
+title = "skram status"
+placement = "popup"
+width = "80%"
+height = "60%"
+command = ["skram", "herdr", "pane", "status"]
+
+[[panes]]
+id = "logs"
+title = "skram logs"
+placement = "popup"
+width = "80%"
+height = "60%"
+command = ["skram", "logs", "-F"]
+
+[[actions]]
+id = "open-tui"
+title = "skram: open TUI"
+contexts = ["workspace"]
+command = ["skram", "herdr", "open", "tui"]
+
+[[actions]]
+id = "status"
+title = "skram: status"
+contexts = ["workspace"]
+command = ["skram", "herdr", "open", "status"]
+
+[[actions]]
+id = "logs"
+title = "skram: follow latest log"
+contexts = ["workspace"]
+command = ["skram", "herdr", "open", "logs"]
+
+[[actions]]
+id = "kill-current"
+title = "skram: kill current job"
+contexts = ["workspace"]
+command = ["skram", "herdr", "action", "kill-current"]
+
+[[actions]]
+id = "queue-drain"
+title = "skram: drain queue"
+contexts = ["workspace"]
+command = ["skram", "herdr", "action", "queue-drain"]
+
+[[events]]
+on = "workspace.created"
+command = ["skram", "herdr", "action", "hint"]
