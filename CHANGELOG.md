@@ -3,6 +3,27 @@
 What changed in each skram release, for someone running the binary. Versions
 follow semver.
 
+## [Unreleased]
+
+## [0.14.0] — 2026-09-21
+
+- Two `skram run` calls issued at the same instant on an idle queue
+  could each start a processor and run two jobs on one resource at once. The
+  processor now holds `processor.lock` for its life and a second one exits,
+  and a lane stays taken while a job an earlier processor started is still
+  running.
+- Documentation, in `docs/`: a configuration reference for every key, how the
+  queue works (jobs on disk, lanes, hold against drain against kill, estimates,
+  exit codes), agent setup and the MCP server's tools, herdr, notifications,
+  troubleshooting with every `SKRAM_*` variable, and an FAQ. Every command a
+  user can see, every variable, and every config key is in them; a release
+  cannot be tagged otherwise.
+- The README opens with a recording of two callers sharing one queue.
+- `skram --help` no longer lists the `lore`, `spec`, `ticket`, `vault`, and
+  `tunnel` redirects; typing one still prints the replacement command.
+- `skram init`'s starter file shows only keys the loader accepts, and the
+  errors for removed keys point at `docs/agent-setup.md`.
+
 ## [0.13.0] — 2026-09-21
 
 First public release.
