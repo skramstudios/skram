@@ -5,6 +5,41 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-22
+
+- `skram kill` makes `skram wait` and `skram run -f` exit 137 and report the
+  job as killed. Before this they reported the child's own exit code
+  (often 1) and `failed`.
+- `skram queue drain` with no processor running now says there is nothing to
+  drain and does nothing. Before this the flag stayed set and stopped the
+  next job's processor as soon as it started.
+- `skram status` clears jobs left marked running by a processor that died,
+  and text `status` shows when the queue is draining.
+- `skram estimate` accepts `--config`, `--context`, and `--json` before or
+  after the verb, and can take the project from `--context` or the current
+  directory like `skram run`; a target's own flags still shape the estimate
+  key. Before this, any flag before the project (such as `--config`) was
+  ignored. `--json` prints the estimate as one object.
+- A project's `guard.enabled: false` now turns the guard off for that
+  project. Before this the key was read by nothing.
+- `expose:` lists targets in the order written, everywhere they are shown.
+- `skram doctor` exits 1 when it finds a problem (any `[!!]` line) and 0
+  when every check passes. Before this it always exited 0; a script that ran
+  `skram doctor` and expected success on a machine with problems now sees 1.
+- `skram dashboard --local` prints `http://127.0.0.1:<port>`, the address it
+  actually listens on, and no QR code. Before this it printed this machine's
+  network address, which the dashboard never answered on. `--local` is for a
+  browser on the same machine.
+- `skram doctor` stops advising `skram init` for a data directory that does
+  not exist yet; the directories are created on first use and the line is
+  informational.
+- `skram workflow run` queues the workflow as one job. The item names every
+  lane its steps' projects declare, waits for all of them, and holds all of
+  them until its last step ends, so a workflow step can no longer run beside
+  a queued job on the same resource. It obeys a hold, names who asked, and
+  takes `-f`, `--json`, and `--on-error` like `skram run`. Before this, a
+  workflow ran its steps in your terminal outside the queue.
+
 ## [0.14.0] — 2026-09-21
 
 - Two `skram run` calls issued at the same instant on an idle queue

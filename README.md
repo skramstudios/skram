@@ -182,7 +182,7 @@ One session per checkout, an agent in each, all deploying to one cluster:
 | --- | --- | --- |
 | `skram agent guard` | a Claude Code and Cursor shell hook: it blocks the ops script, a known `make`/`task`/`just` target, and `kubectl` and `docker` mutations, and prints the `skram run` line instead | [installing it](docs/agent-setup.md) |
 | `skram tui` | running jobs and their logs, a launcher, and the queue, in the terminal | [as a popup](docs/herdr.md) |
-| `skram workflow list`, `skram workflow run` | a DAG of targets, defined under `workflows:` | [the keys](docs/config.md) |
+| `skram workflow list`, `skram workflow run` | a DAG of targets, defined under `workflows:`, queued as one job that holds every lane its steps need | [the keys](docs/config.md) |
 | `skram estimate` | what a command usually takes, and from which runs | [key fallback](docs/how-it-works.md) |
 | `skram prune` | remove old job directories; running jobs and anything the queue still refers to are kept | [defaults](docs/troubleshooting.md) |
 | `skram reap` | reclaim Docker disk space so repeated image builds cannot fill the daemon's disk | [budgets](docs/config.md) |

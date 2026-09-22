@@ -88,15 +88,22 @@ skram queue drain
 Drain signal set. Processor will stop after the running job(s); 0 pending item(s) stay queued.
 ```
 
-Two things to know:
+A drained queue says so, in text as well as `--json`:
 
-- A drain is only visible in `skram status --json`, which carries it as
-  `"drain": true`. The text output has no drain line, so a drained queue and
-  a queue whose processor is gone read the same there.
-- A drain set while no processor is running is consumed by the *next* one.
-  That processor starts, sees the flag, clears it and exits without taking an
-  item, so the enqueue that started it appears to do nothing. Enqueue again
-  (or `skram release`, which also respawns) and the item runs.
+```text
+Queue: 1 pending, 1 running, 0 completed, 0 failed
+Processor: running (PID 64455)
+Draining: processor stops after the running job(s); pending items stay queued
+```
+
+Draining is only meaningful while a processor is running — it is a message to
+that processor. Asking to drain when none is running does nothing and says so,
+rather than leaving a flag that would stop the next processor before it takes
+an item:
+
+```text
+No processor is running, so there is nothing to drain; 1 pending item(s) stay queued.
+```
 
 ### 3. Is another job holding the lane?
 
@@ -153,34 +160,31 @@ If it is killed while jobs are running (a reboot, a `killall`, closing a
 session that owned it), nothing takes the next item until something enqueues
 again.
 
-The tell is a `Queue:` line that counts work with no `Processor:` line under
-it, and no job in the `Running:` block:
+The tell is a `Queue:` line with pending work but no `Processor:` line under
+it: nothing is scheduled to take that pending item.
 
 ```text
 No running jobs.
 
-Queue: 1 pending, 1 running, 3 completed, 0 failed
+Queue: 1 pending, 0 running, 3 completed, 1 failed
 ETA: queue clears in ~3s (1 pending)
 ```
 
-One pending, one "running", and nothing running. What happened to each:
+What happened to the job that was running when the processor died:
 
-- **The job that was running kept running.** A job is its own process group,
-  not a child that dies with the processor, so it finishes and writes its own
-  result. Losing the processor loses the bookkeeping, not the work.
-- **Its queue row still says `running`**, because updating that row is the
-  processor's job and the processor is gone. It is a stale row: the counts
-  are wrong, and it stays until `skram queue reset`. While the job's own
-  process still runs, a new processor keeps its lane taken, so nothing else
-  starts on that resource; once that process is gone the lane is free. If
-  the job's own process really did die — a reboot, rather than the processor
-  alone — the next `skram status` marks that job killed in its job
-  directory.
+- **If its own process survived, it kept running.** A job is its own process
+  group, not a child that dies with the processor, so it finishes and writes
+  its own result; it shows in the `Running:` block with its row still
+  `running`, correctly. Losing the processor loses the scheduler, not the work.
+- **If its own process died too** — a reboot, rather than the processor alone
+  — the next `skram status` reconciles the row: it takes the job's own result
+  when the job wrote one, otherwise it is marked killed. That is the `1 failed`
+  above; the counts no longer lie, so `skram queue reset` is rarely needed.
 - **The pending item starts on the next enqueue.** `skram release` also
   starts a processor when anything is pending.
 
-To clear the stale rows, archive the queue and start a fresh one. History
-already written to job directories is untouched:
+If you would rather start from an empty queue, archive it and start fresh.
+History already written to job directories is untouched:
 
 ```bash
 skram queue reset
@@ -347,10 +351,10 @@ fixes what precedes it.
 ```
 
 The last line is the summary: `All checks passed.` or `N issue(s) found.`,
-counting the `[!!]` lines. **`skram doctor` always exits 0**, including when
-it found problems — read the count, do not test the exit code. If the config
-file itself cannot be read, that is the only `[!!]` line and the run stops
-there:
+counting the `[!!]` lines. `skram doctor` exits 1 when that count is above
+zero and 0 when every check passed, so a script can test it; `[--]` lines
+never change the exit code. If the config file itself cannot be read, that is
+the only `[!!]` line and the run stops there, with exit 1:
 
 ```text
 [ok] Engine v0.13.0 (binary v0.13.0-11-gefe49fe)

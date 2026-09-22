@@ -142,10 +142,11 @@ lane, so a write in it can land beside a running job.
 
 The targets this project offers.
 
-Default: empty, which means every target found in the file. When the list is
-not empty it is a filter: `skram run`, `skram discover`, the MCP server, the
-TUI, and the agent tables show only these, in alphabetical order, and a name
-outside the list is not a target you can run. A name that is not among the file's targets is reported
+Default: empty, which means every target found in the file, in alphabetical
+order. When the list is not empty it is a filter and an order: `skram run`,
+`skram discover`, the MCP server, the TUI, and the agent tables show only
+these, in the order listed, and a name outside the list is not a target you
+can run. A name that is not among the file's targets is reported
 by `skram doctor`, as is an ephemeral target that a non-empty `expose:` leaves
 out (it could never run).
 
@@ -196,10 +197,11 @@ where that project applies: inside a checkout the `repos:` block ties it to,
 or one that contains the project's `path:`. It exempts the `kubectl`, `docker`,
 and `make`/`task`/`just` rules; a configured ops script is blocked regardless.
 
-`enabled:` defaults to true. It dates from the releases that wrote the hook
-into each checkout; no current code path reads it, so setting it to `false`
-does not turn the guard off. Use `allow:` for a command you want through. One
-`SKRAM_*` variable turns the guard off in a shell, and
+`enabled:` defaults to true. `false` takes the project out of the guard: its
+ops script, its `make`/`task`/`just` targets, and its `allow:` list are all
+ignored. The `kubectl` and `docker` rules belong to no project and still
+apply; use `allow:` on a project that applies there for a command you want
+through. One `SKRAM_*` variable turns the guard off in a shell, and
 [troubleshooting](troubleshooting.md) lists it; registering the hook is on the
 [agent setup](agent-setup.md) page.
 
@@ -279,13 +281,23 @@ Steps with no unmet dependency run in parallel. An index outside the list, a
 step that depends on itself, a cycle, an empty step list, and a step naming an
 unknown project are all refused before anything runs.
 
-A workflow runs its steps itself, in the process you started it in. Its steps
-are not queue items and take no lane, so a workflow can run beside a queued
-job on the same resource. To keep a step in the lane, queue it with
-`skram run` instead.
+`skram workflow run` queues the workflow as one job. The item names every
+lane its steps' projects declare (`resource:`, or the project's own name), so
+it starts when all of those lanes are free and holds all of them until its
+last step ends; no queued job runs beside a step on a resource the step's
+project protects. Inside the job, steps run in parallel where the graph
+allows. The item carries the actor, obeys a hold, and takes `-f`, `--json`,
+and `--on-error` like `skram run`:
 
-The workflow writes one job directory under `logs_dir:`, with an event per
-step, and its exit code is the first failing step's.
+```bash
+skram workflow run deploy-stack -f            # attach; the exit code is the workflow's
+skram workflow run deploy-stack --json        # the enqueue report, with its lanes
+skram wait --last                             # or wait on the item id
+```
+
+The job's directory under `logs_dir:` has an event per step, its
+`status.json` names the workflow as `_workflow/<name>`, and its exit code is
+the first failing step's.
 
 ## `reaper:`
 
@@ -380,8 +392,8 @@ queue_dir: ~/.local/share/skram/queue
 
 Those are the defaults, with `$XDG_DATA_HOME/skram` in place of
 `~/.local/share/skram` when that variable is set. Both directories are created
-the first time they are used; until then `skram doctor` reports them as
-missing.
+the first time they are used; until then `skram doctor` notes them as not
+created yet, which is not an issue.
 
 `logs_dir:` holds one directory per job, named with the job id, containing
 `raw.log` (everything the job printed), `events.jsonl` (one JSON object per

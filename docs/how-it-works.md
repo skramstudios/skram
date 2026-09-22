@@ -209,6 +209,12 @@ That second part is deliberate. A pending item blocks its lanes for everything
 behind it, which keeps each lane in order and stops a two-resource item from
 being overtaken forever by single-resource work.
 
+A workflow (`skram workflow run`) is one item under this rule. It names every
+lane its steps' projects declare, waits for all of them, and holds all of
+them until its last step ends, so a step never runs beside a queued job on a
+resource the step's project protects. `skram status` shows it as
+`_workflow/<name>` with its lanes.
+
 `skram status` shows a Lanes block whenever there is more than one lane, with
 what is running and what is queued in each. A lane can also be addressed
 directly:
@@ -342,7 +348,7 @@ project alone:
 
 ```bash
 skram estimate my-app build              # key [my-app, build]
-skram estimate my-app build [args…]      # a new flag combination
+skram estimate my-app build --scope api  # a new flag combination
 skram estimate my-app deploy             # a target that has never run
 ```
 
@@ -354,6 +360,16 @@ estimate: ~2s  (from 2 runs · target; matched [docker-app, build]; last run 11s
 So a flag combination you have never used inherits the target's history, and a
 brand new target inherits the project's. `skram estimate` always prints which
 key it matched, so you can see how specific the answer is.
+
+Like `skram run`, `estimate` takes the project from the current directory (or
+`--context`) when you leave it out, and `--json` prints the whole answer — key,
+matched key, and the estimate in seconds — as one object:
+
+```bash
+skram estimate build                     # project from the current directory
+skram estimate --context my-app build    # or named explicitly
+skram estimate my-app build --json       # machine-readable
+```
 
 The number itself is a weighted average over the ten most recent runs, which
 follows a machine that got faster without letting one outlier dominate. Only
@@ -401,8 +417,8 @@ directly in a script. Four other codes are Skram's own:
 
 A timeout is worth distinguishing from a failure: the item may simply be
 behind a hold, and on a timeout `wait` says so, naming who holds the queue and
-why. Note that a job you stop with `skram kill` normally records the code its
-own process exited with, so `wait` reports that code rather than 137.
+why. A job you stop with `skram kill` is recorded as killed, so `wait` and
+`run -f` exit 137 for it.
 
 ## The dashboard
 
@@ -411,7 +427,7 @@ running jobs, and each job's log streamed line by line as it is written.
 
 ```bash
 skram dashboard                 # start it, print the URL and a QR code
-skram dashboard --local         # LAN only, no tunnel
+skram dashboard --local         # this machine only: 127.0.0.1, no tunnel, no QR code
 skram dashboard --no-qr         # no QR code
 skram dashboard --port 9000     # a port other than 8484
 skram dashboard status          # is one running, on what URL, since when
@@ -429,7 +445,10 @@ private as you keep it. `--no-auth` turns that off, which is only sensible on
 a network you trust. Without `--local`, Skram opens an
 [ngrok](https://ngrok.com) tunnel so the URL works off the machine — that is
 the one thing in Skram that talks to a third party, it needs
-`NGROK_AUTHTOKEN`, and `--local` never does it.
+`NGROK_AUTHTOKEN`, and `--local` never does it. `--local` listens on
+`127.0.0.1` and prints a `http://127.0.0.1:<port>` URL, so it opens only in a
+browser on the same machine; other machines on your network cannot reach it,
+and it prints no QR code.
 
 ## The metrics stack
 
