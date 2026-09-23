@@ -15,6 +15,7 @@ exits with.
 - [The queue file](#the-queue-file)
 - [The processor](#the-processor)
 - [Which project a bare `skram run` means](#which-project-a-bare-skram-run-means)
+- [Running in another checkout: `-C`](#running-in-another-checkout--c)
 - [Lanes, and the rule for an item with two resources](#lanes-and-the-rule-for-an-item-with-two-resources)
 - [Hold, drain, kill, cancel](#hold-drain-kill-cancel)
 - [Ephemeral targets and `--now`](#ephemeral-targets-and---now)
@@ -39,7 +40,8 @@ Every job gets a directory named after its job id, under the logs directory
   events.jsonl   one JSON object per line: job_start, a log event per output
                  line (with its stream), job_end with status and duration
   status.json    the job's record: command, project, target, actor, PID,
-                 start and end times, exit code, duration, failure reason
+                 checkout, start and end times, exit code, duration,
+                 failure reason
 ```
 
 The job id is the date and time the job started plus a random suffix, so a
@@ -175,6 +177,76 @@ state, not configuration: it is not part of the config file, it is not read
 by anything else, and deleting the file just leaves you with no active
 context. It is the fallback for working outside any checkout; inside one,
 step 2 answers first and the active context is never consulted.
+
+## Running in another checkout: `-C`
+
+A project's `path:` is one checkout of its repo. Run from inside another one,
+such as a worktree a coding agent is working in, a target runs there, with
+no flag: the checkout you stand in is the place, the project is the recipe.
+
+```bash
+cd ../my-app--feature
+skram run e2e -f                                 # the worktree's own Makefile, in the worktree
+```
+
+From the configured checkout, or from a directory that is not a checkout of
+the project's repo, the run is in `path:` as always; being elsewhere is never
+a refusal. To name the checkout explicitly, from anywhere, use
+`-C, --checkout <dir>`. It always wins over the directory you are in, so it
+is also the way back to `path:` from inside a worktree:
+
+```bash
+skram run my-app e2e -C ../my-app--feature -f   # the worktree's own Makefile, in the worktree
+skram run -C ../my-app--feature my-app e2e      # -C may come before the project too
+skram run my-app e2e -C ~/dev/my-app            # from a worktree: the configured checkout
+```
+
+The directory must be a checkout of the same repo as `path:`: another worktree
+of it, a worktree inside it, or a second clone with the same origin (or covered
+by the same `repos:` entry). A relative `-C` is resolved against the current
+directory. Anything else is refused with a message naming the project's repo
+and its configured path. A `-C` after a bare `--` is the target's own argument
+and is passed through.
+
+The checkout's own backend file is the one used, at the same place relative to
+the checkout as the configured file is to `path:`; a project at a subdirectory
+of its repo runs in the same subdirectory of the checkout. So a target that
+exists only in the worktree's Makefile runs, one missing there is refused
+naming that file, and a checkout without the file at all is an error naming
+the checkout. `expose:` and `ephemeral:` apply by name, and an ephemeral target
+runs immediately in the checkout. `-C` at the configured path is simply an
+ordinary run.
+
+`skram discover` resolves the same way. In a worktree it reads the
+worktree's own file for that repo's projects, so a target only that branch
+has is listed, and it prints the checkout it read from; `discover --json`
+gives it as `checkout`, with `path` and `file` the checkout's. `discover -C
+<dir>` names the checkout explicitly. The MCP `discover` tool and the
+`skram://projects/<name>` resource always read the configured `path:`.
+
+`skram workflow run` follows the checkout step by step: a step runs there when
+its project's repo is the checkout's, and in its `path:` otherwise (see
+[workflows](config.md#workflows)).
+
+A checkout is a place, not a separate queue: the job takes the project's lanes
+like any other, and it shares the target's estimate history. It is recorded on
+the queue item, in `status.json`, and in every `--json` report that names the
+job or item (`run`, `status`, `queue list`, `wait`, `logs`, `explain`) as
+`checkout`, the checkout's absolute path. The field is absent when the job ran
+in the configured path. The stored command carries `-C <path>` too, so it is
+the command the processor ran and the re-run `explain` suggests.
+
+Human output names the checkout by its directory name after the project and
+target, `my-app/e2e (my-app--feature)`, in `status`, `queue list`, `logs -F`,
+`explain`, `skram tui`, and the dashboard; a job in the configured path shows
+nothing extra.
+
+If the checkout is gone when the job's turn comes (the worktree was removed
+while the item waited), the job fails without running, with the reason
+`checkout_removed`, and `explain` suggests re-running it with `-C` in another
+checkout or in the configured path. It is a failure like any other, so
+`--on-error stop` cancels the rest of its lanes. A checkout removed while its
+job is running is simply that job's own failure.
 
 ## Lanes, and the rule for an item with two resources
 
@@ -378,8 +450,9 @@ runs that count are used:
 - failed and killed runs are never used — a build that crashed after three
   seconds says nothing about a real one;
 - samples older than 30 days are ignored;
-- Skram's own flags (`-f`, `--now`) never become part of a key, so attaching
-  to a job does not fragment its history.
+- Skram's own flags (`-f`, `--now`, and `-C` with its directory) never become
+  part of a key, so attaching to a job, or running it in another checkout,
+  does not fragment its history.
 
 The same estimate appears at enqueue, as the remaining time in `skram status`,
 as the queue and lane ETAs, and as the deadline behind `skram wait --timeout

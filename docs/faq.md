@@ -84,12 +84,19 @@ colliding.
 
 Practically, inside any worktree:
 
-- Name the project, and it works from anywhere: `skram run apps build`. The
-  job runs in the project's own directory, not in the directory you called
-  from, so it always builds the checkout the project points at.
-- Omitting the project name only works when the directory you are in belongs
-  to exactly one project. In a worktree away from the configured checkout it
-  will not resolve; name the project.
+- `skram run build` (or `skram run apps build`) from inside a worktree of the
+  project's repo runs in that worktree: its own Makefile or script, its own
+  code, still through the project's lane. From the configured checkout, or
+  from a directory that is not a checkout of the repo, it runs in the
+  project's configured `path:`.
+- `-C <dir>` names the checkout explicitly and always wins, so
+  `skram run apps build -C ~/dev/apps` from a worktree runs in the configured
+  checkout. See [running in another checkout](how-it-works.md#running-in-another-checkout--c).
+- `skram discover` in a worktree reads the worktree's own file, so a target
+  only that branch has is listed, and it says which checkout it read.
+- Omitting the project name works when the directory you are in belongs to
+  exactly one project; a subdirectory of a worktree resolves to the same
+  project as that subdirectory of the configured checkout.
 
 ## Is the source available?
 

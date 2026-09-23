@@ -5,6 +5,40 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-22
+
+- Run a project's targets in any checkout of its repo: a worktree, a
+  worktree nested inside the checkout, or a second clone. From inside one,
+  `skram run <target>` runs there, through the queue, with the project's
+  lanes and estimates, using that checkout's own Makefile, ops script,
+  Taskfile, or justfile; `skram discover` lists that checkout's targets.
+  `-C <dir>` (`--checkout`) names a checkout explicitly and always wins. A
+  directory outside the project's repo is refused with a message that says
+  why.
+- The `--json` output of `run`, `status`, `queue list`, `wait`, `logs`,
+  `explain`, and `discover` names the checkout as `checkout` (absent when
+  the job ran in the configured `path:`). Output for people shows it as
+  `my-app/e2e (my-app--feature)` in `status`, `queue list`, `logs -F`,
+  `explain`, `skram tui`, and the dashboard.
+- A checkout removed while its job waited in the queue fails that job with
+  the reason `checkout_removed`, and `skram explain` says how to re-run it.
+- The MCP `run` tool takes an optional `checkout`, since the server cannot
+  see which directory the agent works in.
+- `skram agent install-rules` and `skram doctor` also cover each checkout's
+  linked worktrees, so a new worktree gets its agent files.
+- herdr: a job shows in the sidebar of the pane standing in its checkout, and
+  the sidebar names the checkout.
+- `skram workflow run` follows the checkout you are in: the steps whose
+  project lives in that repo run there, from that checkout's own Makefile or
+  script, and the other steps run in their configured `path:`. `-C <dir>`
+  names the checkout explicitly. `skram explain` on a workflow now suggests
+  a `skram workflow run …` command to re-run it.
+- The MCP server sees config edits without a restart: a project added to or
+  removed from the config shows in `discover`, `run`, and
+  `skram://projects/<name>` on the next call.
+- A job label no longer shows internal flags such as `--foreground` for a
+  job with no project or target.
+
 ## [0.15.0] — 2026-09-22
 
 - `skram kill` makes `skram wait` and `skram run -f` exit 137 and report the

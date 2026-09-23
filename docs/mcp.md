@@ -65,7 +65,9 @@ fails. Prefer `wait` to polling `status`.
 
 Projects, their targets, the help text the backend file carries, whether a
 target is ephemeral, and the typical duration from this machine's own history.
-Call it first whenever a project or target name is not certain.
+Call it first whenever a project or target name is not certain. It always
+reads each project's configured `path:`, wherever the server was started;
+`skram discover` in a shell follows the checkout it is run from.
 
 Input, all optional:
 
@@ -238,14 +240,21 @@ Input:
   "project": "apps",
   "target": "test",
   "args": ["--scope", "auth"],
-  "on_error": "stop"
+  "on_error": "stop",
+  "checkout": "/home/you/dev/apps--T-42"
 }
 ```
 
 `project` and `target` are required and come from `discover`. `args` are
 handed to the target verbatim. `on_error` is `stop` — if this job fails,
 cancel the items still pending in its lanes — or `continue`; left out, the
-queue's own setting applies.
+queue's own setting applies. `checkout` runs the target in another checkout
+of the project's repo — a worktree or another clone — instead of its
+configured path; absolute, or relative to the directory the server was
+started in (never the caller's, since MCP has no notion of "your cwd").
+Left out, `run` uses the configured path, same as no `-C` on the CLI. A
+`checkout` that is not a checkout of the project's repo is refused, naming
+the project's repo and configured path.
 
 The call returns as soon as the item is queued. It does not wait:
 
@@ -269,7 +278,10 @@ The call returns as soon as the item is queued. It does not wait:
 `lane_pending` is how many items are already waiting in this one's lanes;
 `queue_eta_seconds` adds the remainder of whatever is running there. `wait` is
 the shell command that does what the `wait` tool does. Call `wait` with
-`item_id` next.
+`item_id` next. A `checkout` field, the checkout's absolute path, appears
+here and in every later report naming this item or job (`wait`, `status`,
+`explain`, `logs`) when the call named one; it is absent for a job in the
+configured path.
 
 While the queue is held, the same call still succeeds — the item is queued —
 and says so:
@@ -311,6 +323,8 @@ directory, so `run` executes it immediately and returns what it printed.
   "output": "nothing running\n"
 }
 ```
+
+It carries `checkout` too when the call named one.
 
 ### wait
 

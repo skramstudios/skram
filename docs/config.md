@@ -293,7 +293,15 @@ and `--on-error` like `skram run`:
 skram workflow run deploy-stack -f            # attach; the exit code is the workflow's
 skram workflow run deploy-stack --json        # the enqueue report, with its lanes
 skram wait --last                             # or wait on the item id
+skram workflow run deploy-stack -C ../api--feature   # api's steps in that worktree
 ```
+
+Run from inside another checkout of a step's repo (a worktree, a second
+clone), the steps whose project is in that repo run there, from that
+checkout's own backend file, and every other step runs in its `path:`;
+`-C, --checkout <dir>` names the checkout explicitly and is refused when it
+belongs to no step's repo. The item and `status.json` then carry `checkout`,
+and the workflow shows as `_workflow/<name> (<checkout dir name>)`.
 
 The job's directory under `logs_dir:` has an event per step, its
 `status.json` names the workflow as `_workflow/<name>`, and its exit code is
@@ -373,10 +381,13 @@ What the block changes:
 - `skram run <target>` with no project name works inside a checkout: the
   project is the one that applies there, or `default:` when several do. With
   several and no default, the run is refused and the candidates are named.
+  Inside a checkout other than the project's `path:` (a worktree, a second
+  clone), the run happens in that checkout.
 - The guard's `make`, `task`, `just`, `kubectl`, and `docker` rules, and the
   `allow:` patterns, use the projects that apply where the command runs.
 - `skram agent install-rules` visits every path listed here, plus the git root
-  of every project's `path:`, and writes the machine-local agent files there.
+  of every project's `path:`, plus each of those checkouts' own linked
+  worktrees, and writes the machine-local agent files there.
 - `skram doctor` reports an entry whose remote no checkout on this machine
   matches, and a path whose spelling differs from the one on disk.
 
@@ -434,6 +445,7 @@ message instead of a surprise.
 skram doctor                    # projects, paths, targets, data directories
 skram discover                  # every project with the targets it exposes
 skram discover --json           # the same, with resources and the ephemeral flag
+skram discover -C ../my-app--feature   # read a worktree's own files for its repo's projects
 ```
 
 `skram doctor` is the one to run after an edit. It reports a path that does

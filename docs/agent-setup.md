@@ -71,7 +71,12 @@ skram agent install-rules --check      # write nothing; exit 1 if anything is mi
 ```
 
 `--projects a,b` narrows to the checkouts where those projects apply, and
-`--repos x,y` to the checkouts of those `repos:` entries.
+`--repos x,y` to the checkouts of those `repos:` entries. Every checkout
+carries its linked worktrees along automatically — a `git worktree add`
+sibling, one nested inside the checkout, or any other linked worktree gets
+the same two files, with no extra config; narrowing applies to them the same
+way. A worktree whose directory has been removed but not pruned from git is
+skipped without a line.
 
 ```text
   /home/you/dev/apps
@@ -93,8 +98,9 @@ Three files, and **none of them is committed**:
 `.git/info/exclude` is the checkout's own private ignore file: it is not
 tracked and never reaches a commit. `.gitignore` is never touched. So this
 works in a repo you have no right to change, and `git status` stays clean. A
-linked worktree gets its lines in the exclude file it shares with the main
-checkout.
+linked worktree gets its own `AGENTS.local.md`/`CLAUDE.local.md`, and its
+lines land once in the exclude file it shares with the main checkout, not
+once per worktree.
 
 The section is a function of your config alone — no timings, nothing
 machine-specific — so `--check` compares bytes and gives the same answer on
