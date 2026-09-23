@@ -195,8 +195,7 @@ One session per checkout, an agent in each, all deploying to one cluster:
 and tickets in a git repository you own;
 [Skram Tunnel](https://github.com/skramstudios/skram-tunnel) shares a local app
 and the identity provider in front of it on one public URL. Each installs on
-its own and reads its own blocks of the same config file. `skram lore`,
-`spec`, `ticket`, `vault`, and `tunnel` print the equivalent command and exit.
+its own and reads its own blocks of the same config file.
 
 ## What it is not
 

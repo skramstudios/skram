@@ -5,6 +5,19 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-23
+
+- `skram agent install-rules` removes a skram section an older skram wrote
+  into `AGENTS.local.md` in a checkout that has no projects; before, it was
+  left in place and `--check` passed over it. Anything else in the file,
+  including skram-vault's section, stays as it is, and `CLAUDE.local.md`'s
+  import goes only when the file itself is removed. `skram doctor` lists the
+  leftover section until then.
+
+- **Breaking:** `skram lore`, `spec`, `ticket`, `vault`, and `tunnel` no
+  longer redirect. Each is now an unknown command; run `skram-vault` or
+  `skram-tunnel` directly instead.
+
 ## [0.16.0] — 2026-09-22
 
 - Run a project's targets in any checkout of its repo: a worktree, a
