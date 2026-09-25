@@ -177,6 +177,7 @@ Output, with one job running and one item waiting behind it:
     "running": 1,
     "completed": 4,
     "failed": 0,
+    "killed": 0,
     "cancelled": 0,
     "processor_pid": 65618,
     "processor_alive": true,
@@ -241,20 +242,46 @@ Input:
   "target": "test",
   "args": ["--scope", "auth"],
   "on_error": "stop",
-  "checkout": "/home/you/dev/apps--T-42"
+  "checkout": "/home/you/dev/apps--T-42",
+  "env": {"E2E_GREP": "login"}
 }
 ```
 
 `project` and `target` are required and come from `discover`. `args` are
 handed to the target verbatim. `on_error` is `stop` — if this job fails,
-cancel the items still pending in its lanes — or `continue`; left out, the
-queue's own setting applies. `checkout` runs the target in another checkout
+cancel the items still pending in its lanes — or `continue`, which is
+two-way: it also means this item, while still pending, survives a `stop`
+from a failure ahead of it in its lane. Left out, the queue's own setting
+applies. `checkout` runs the target in another checkout
 of the project's repo — a worktree or another clone — instead of its
 configured path; absolute, or relative to the directory the server was
 started in (never the caller's, since MCP has no notion of "your cwd").
 Left out, `run` uses the configured path, same as no `-C` on the CLI. A
 `checkout` that is not a checkout of the project's repo is refused, naming
-the project's repo and configured path.
+the project's repo and configured path. `env` is an object of variables for
+this job alone, the same as `--env NAME=VALUE` on the CLI: set last, over the
+project's `env:` and the server's environment, and refused when a name is not
+an environment name or is one of the project's
+[inputs](config.md#inputs) (see
+[per-job variables](how-it-works.md#per-job-variables---env)).
+
+For a project with [inputs](config.md#inputs) — other repos its targets
+read — pass `checkouts` instead: a list of directories, one per repo,
+resolved the same way (absolute, or relative to the server's own cwd) and
+the same way the CLI's repeatable `-C` binds them, each classified by the
+repo it is a checkout of. `checkout` and `checkouts` may not both be given;
+that call is refused, saying to use one. Neither given, an input takes its
+repo's default checkout; the server's own cwd is never followed for
+`checkout`, `checkouts`, or a project's inputs, since it is the parent
+session's, not the caller's:
+
+```json
+{
+  "project": "apps",
+  "target": "test",
+  "checkouts": ["/home/you/dev/my-lib--x", "/home/you/dev/my-e2e--x"]
+}
+```
 
 The call returns as soon as the item is queued. It does not wait:
 
@@ -281,7 +308,13 @@ the shell command that does what the `wait` tool does. Call `wait` with
 `item_id` next. A `checkout` field, the checkout's absolute path, appears
 here and in every later report naming this item or job (`wait`, `status`,
 `explain`, `logs`) when the call named one; it is absent for a job in the
-configured path.
+configured path. A project with inputs carries an `inputs` field the same
+shape as the CLI's — keyed by variable, each with `repo`, `dir` (the
+checkout the job read), and `default` — in this same set of reports; see
+[inputs](config.md#inputs) for the full shape. It is absent for a project
+with none.
+An `env` field, the variables the call gave, appears in the
+same reports the same way and is absent when the call gave none.
 
 While the queue is held, the same call still succeeds — the item is queued —
 and says so:
@@ -324,7 +357,9 @@ directory, so `run` executes it immediately and returns what it printed.
 }
 ```
 
-It carries `checkout` too when the call named one.
+It carries `checkout` and `env` too when the call gave them, and `inputs` for a
+project that has them; the child sees each input's variable and its
+`SKRAM_INPUT_<VAR>_DEFAULT` companion exactly as a queued run's would.
 
 ### wait
 
@@ -365,7 +400,7 @@ Output for an item that finished:
 | `completed` | the target ran and exited 0 |
 | `failed` | it ran and exited non-zero; `exit_code` is the target's own |
 | `cancelled` | the item never ran; `cancelled_by` says who or what withdrew it |
-| `killed` | the job was stopped while it was running |
+| `killed` | the job was stopped while it was running, by `skram kill` or any other signal; `exit_code` is 137 |
 | `timeout` | `timeout_seconds` elapsed and it is still going |
 
 A timeout is not a failure and not an error — the job is still going, and
@@ -611,6 +646,10 @@ A project resource reads like this:
 Entry point: `ops.sh` (script) in `/home/you/dev/apps`. Run: `skram run apps <target> [args] --json`.
 Resource lane: `docker`. Jobs here serialise with every other project on the same lane.
 ```
+
+A project with `inputs:` gets one more line, naming each variable and repo
+— never a machine path, so the table stays the same on every machine — for
+example `` Inputs: `LIB_DIR` (repo `my-lib`), `E2E_DIR` (repo `my-e2e`). ``
 
 ## The job-end notification
 

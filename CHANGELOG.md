@@ -5,6 +5,110 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-25
+
+- **Breaking:** a job that was killed is now recorded as `killed` with exit
+  code 137 everywhere. Before, `skram status` and `skram queue list` showed
+  it as `failed` with exit code `-1` while `skram explain` and `skram wait`
+  said `killed`. If you read the JSON, `skram status --json`
+  (`most_recent`), `skram queue list --json`, `skram explain --json`, and
+  `skram wait --json` now report `"status": "killed"` and `"exit_code": 137`
+  for a killed job; `skram status --json` has a `killed` count beside
+  `failed`, and `skram queue list --json` a `killed` entry in `counts`. Jobs
+  killed by an earlier release read the same way.
+- A job ended by any signal, not only `skram kill` — the out-of-memory
+  killer, a `kill` from another shell — is recorded as `killed` too, with
+  `reason: signal` and the signal's name (such as `SIGKILL`) as
+  `reason_detail`; `skram explain` and the completion notification name it.
+  Before, it was recorded as `failed`, with exit code 1 or `-1`.
+- Killing a queued job's process with `kill -KILL` (or a `skram kill` that
+  had to fall back to SIGKILL) no longer leaves the command it was running
+  behind. Before, the target script and everything it started kept running
+  after the job was recorded as `killed`, holding whatever it was using
+  while the next job in its lane started. Now skram stops them before it
+  records the job, which still reads `killed` with exit code 137.
+- `skram kill` on a job that has already finished refuses and says how it
+  ended, instead of acting on it.
+- **Breaking:** a job now cleans up everything its command started even when
+  the command exits normally on its own, not only when it's killed. Before,
+  a command that started a background process and then exited could leave
+  that process running after the job was recorded as done, holding whatever
+  it was using while the next job in its lane started. If your command
+  relies on something outliving the job on purpose, give it its own session
+  (or run it under a service manager) — the job's log now names anything it
+  had to clean up this way, so it's clear it's gone and why.
+- A project can name the other repos its targets read, under `inputs:`: one
+  environment variable per repo, such as `LIB_DIR: my-lib`. A job follows
+  each input the way it follows the project's own checkout: to the checkout
+  of that repo you stand in, to one you name with `-C`, and otherwise to the
+  repo's first `paths:` entry that exists on this machine. The target sees
+  each variable set to that directory and `SKRAM_INPUT_<VAR>_DEFAULT` set to
+  the default one. A run is refused before anything is queued when an input
+  has no checkout on this machine and you named none. `skram discover` lists
+  each project's inputs, `skram doctor` reports an input with no checkout
+  here, and the targets table `skram agent install-rules` writes names each
+  input's variable and repo. See `docs/config.md`.
+- `-C <dir>` can be given more than once to `skram run`, `skram discover`,
+  and `skram workflow run`, one directory per repo: the project's own
+  checkout and one for each input. Two directories for one repo are refused.
+  With no inputs, a single `-C` works as before.
+- Every job records where its inputs resolved. The queue item, `status.json`,
+  the `job_start` and `job_end` events, and the `--json` output of `run`,
+  `status`, `queue list`, `wait`, `explain`, and `logs` carry `inputs`, keyed
+  by variable, with the repo, the directory, its default, and the commit it
+  was on when the job was queued and when it started. Labels name each input
+  that is off its default after the checkout, as in
+  `my-app/build (my-lib--x)`, in `status`, `queue list`, `logs -F`,
+  `explain`, `skram tui`, the dashboard, and the herdr sidebar. Where an
+  input resolved is fixed when the job is queued; editing `paths:` while it
+  waits does not move it.
+- An input whose commit moved between queueing and starting gets one warning
+  line in the job log and a `warn` event tagged `input_drift`; the job still
+  runs. An input whose directory is gone when the job's turn comes fails the
+  job with `checkout_removed`, and `skram explain` suggests how to re-run
+  it.
+- The TUI's Launch tab follows inputs from the directory it was started in,
+  like `skram run` does, and shows them in its preview.
+- The MCP `run` tool takes `checkouts`, a list of directories, one per repo,
+  for a project with inputs, and `env`, variables for that job only. Its
+  result carries `inputs`.
+- `skram run --env NAME=VALUE` sets a variable for that job alone, over the
+  project's `env:` and your environment. It can be given more than once, and
+  it may not set an input's variable; use `-C` for that.
+- `--on-error continue` on a pending item now also keeps it from being
+  cancelled when a job ahead of it in its lane fails under `stop`. Before
+  this, a `stop` failure cancelled it anyway.
+- `reaper.timeout` (default `5m`) bounds each destructive docker call the
+  reaper makes and the whole reap that runs after a job. Read-only docker
+  calls stop after 30s, so a Docker daemon that hangs can no longer hold up
+  the job's lane. A `docker system df` that times out only skips the disk
+  usage report.
+- Fixed: a shell script's `case` command whose arm was written on a single
+  line — for example `deploy) ./do-deploy.sh; exit 0 ;;` — was silently
+  dropped from discovery, so running it said the command was not found.
+  Arms written this way now show up like any other, at any indentation
+  (including none), with a quoted name (`"deploy")`), and with more than one
+  name on the arm (`a|b)`). `skram init --detect` also now recognizes a
+  script whose only arms are written this way.
+- `skram run -f` and `skram wait` could report a job done, with the wrong
+  (too short) duration, while its post-job reap was still running and its
+  lane was still held. Both now wait for the reap and report the same
+  duration `skram status` does.
+- Every command prints the whole job id, as in `J20260924_105251_84ef6a`.
+  `skram status`, `skram explain`, `skram wait`, and notifications used to
+  cut off the suffix, printing an id that `skram explain` then refused, and
+  two jobs started in the same second looked the same.
+- `skram explain`, `skram logs`, `skram wait`, and `skram kill` (and the MCP
+  `explain`, `logs`, and `wait` tools) each take a job id or a queue item id
+  (`q_…`), whether the item is still queued or already in the queue's
+  history. `skram wait` on an item from history now answers with how it
+  ended instead of refusing it. Ids must be given whole.
+- `skram kill <item id>` kills that item's job. On an item that has not
+  started it refuses and tells you to run `skram queue cancel <item id>`.
+- `skram queue list` shows each item's id and, once it has started, its job
+  id, so there is something to paste into `queue cancel`, `wait`, or
+  `explain`.
+
 ## [0.17.0] — 2026-09-23
 
 - `skram agent install-rules` removes a skram section an older skram wrote

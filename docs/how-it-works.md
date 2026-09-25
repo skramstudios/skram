@@ -16,6 +16,7 @@ exits with.
 - [The processor](#the-processor)
 - [Which project a bare `skram run` means](#which-project-a-bare-skram-run-means)
 - [Running in another checkout: `-C`](#running-in-another-checkout--c)
+- [Per-job variables: `--env`](#per-job-variables---env)
 - [Lanes, and the rule for an item with two resources](#lanes-and-the-rule-for-an-item-with-two-resources)
 - [Hold, drain, kill, cancel](#hold-drain-kill-cancel)
 - [Ephemeral targets and `--now`](#ephemeral-targets-and---now)
@@ -29,6 +30,10 @@ exits with.
 
 An **item** is an entry in the queue that has not started. A **job** is that
 item once it has: it has a process group, a directory, and an exit code.
+
+Nothing a job's target starts outlives the job: when the target exits,
+anything still in its process group is killed. A process that must outlive
+the job starts in its own session or under a service manager.
 
 Every job gets a directory named after its job id, under the logs directory
 (`~/.local/share/skram/logs` unless `logs_dir` moves it):
@@ -45,7 +50,11 @@ Every job gets a directory named after its job id, under the logs directory
 ```
 
 The job id is the date and time the job started plus a random suffix, so a
-directory listing is in start order. Secrets are redacted on the way into
+directory listing is in start order. Every command prints the whole id,
+suffix included, and takes it back exactly: two jobs that start in the same
+second differ only in the suffix. `explain`, `logs`, `wait`, and `kill` also
+take the item id (`q_…`) and follow it to its job, whether the item is still in
+the queue or already in its history. Secrets are redacted on the way into
 `raw.log` and `events.jsonl`.
 
 Those three files are the only place job output lives, and everything else
@@ -85,7 +94,7 @@ and passed down to the job, so `status.json` names whoever asked for the work
 rather than the processor.
 
 ```bash
-skram queue list            # one line per item, with the actor
+skram queue list            # one line per item: its id, its job id once started, the actor
 skram queue list --json     # the file as stored, plus liveness and counts
 ```
 
@@ -208,6 +217,29 @@ directory. Anything else is refused with a message naming the project's repo
 and its configured path. A `-C` after a bare `--` is the target's own argument
 and is passed through.
 
+`-C` may be given more than once, one directory per repo, before or after the
+project and target. Each is classified by the repo it is a checkout of: the
+project's own repo sets the checkout as above, and the repo of one of the
+project's [inputs](config.md#inputs) binds that input's variable to it. One
+that is a checkout of neither is refused with a message naming the project's
+repo and its input repos. Two for the same repo are refused with a message
+naming the repo, since a job has one checkout of each; naming one directory
+twice is the same as naming it once.
+
+Inputs follow the directory you stand in too: in a worktree of an input's
+repo, that input binds to the worktree unless a `-C` names another checkout
+of the same repo. An input nothing binds is its repo's default checkout. The
+child gets each input variable and `SKRAM_INPUT_<VAR>_DEFAULT`, and the stored
+command carries a `-C <path>` for the project's checkout (when off `path:`)
+and for each input off its default, so the queued child resolves the same
+directories.
+
+```bash
+cd ../my-lib--feature
+skram run my-app build -f                               # LIB_DIR is this worktree
+skram run my-app test -C ../my-lib--x -C ../my-e2e--x   # two inputs, from anywhere
+```
+
 The checkout's own backend file is the one used, at the same place relative to
 the checkout as the configured file is to `path:`; a project at a subdirectory
 of its repo runs in the same subdirectory of the checkout. So a target that
@@ -221,12 +253,14 @@ ordinary run.
 worktree's own file for that repo's projects, so a target only that branch
 has is listed, and it prints the checkout it read from; `discover --json`
 gives it as `checkout`, with `path` and `file` the checkout's. `discover -C
-<dir>` names the checkout explicitly. The MCP `discover` tool and the
+<dir>` names the checkout explicitly, once per repo, and each project reads
+the one that is its checkout. The MCP `discover` tool and the
 `skram://projects/<name>` resource always read the configured `path:`.
 
 `skram workflow run` follows the checkout step by step: a step runs there when
-its project's repo is the checkout's, and in its `path:` otherwise (see
-[workflows](config.md#workflows)).
+its project's repo is the checkout's, and in its `path:` otherwise, and each
+step's inputs follow the same `-C` list and directory as a `skram run` of
+that project would (see [workflows](config.md#workflows)).
 
 A checkout is a place, not a separate queue: the job takes the project's lanes
 like any other, and it shares the target's estimate history. It is recorded on
@@ -239,14 +273,51 @@ the command the processor ran and the re-run `explain` suggests.
 Human output names the checkout by its directory name after the project and
 target, `my-app/e2e (my-app--feature)`, in `status`, `queue list`, `logs -F`,
 `explain`, `skram tui`, and the dashboard; a job in the configured path shows
-nothing extra.
+nothing extra. Each [input](config.md#inputs) off its default follows, by its
+directory name: `my-app/e2e (my-app--feature, my-lib--x)`. Inputs are
+recorded as `inputs` beside `checkout` on the item, in `status.json`, and in
+the same reports, each with the commit it was on at enqueue (`head`) and at
+start (`head_at_start`); a job whose input moved in between runs anyway,
+with a warning in its log ([inputs](config.md#inputs)).
 
 If the checkout is gone when the job's turn comes (the worktree was removed
 while the item waited), the job fails without running, with the reason
 `checkout_removed`, and `explain` suggests re-running it with `-C` in another
-checkout or in the configured path. It is a failure like any other, so
-`--on-error stop` cancels the rest of its lanes. A checkout removed while its
-job is running is simply that job's own failure.
+checkout or in the configured path. An input's directory gone at that point
+fails the job the same way, naming the input's variable. It is a failure
+like any other, so `--on-error stop` cancels the rest of its lanes. A
+checkout removed while its job is running is simply that job's own failure.
+
+## Per-job variables: `--env`
+
+`--env NAME=VALUE` sets a variable for one job and no other, so a single run
+can change a setting without editing a file every queued job behind it reads:
+
+```bash
+skram run my-app test auth --env E2E_GREP=login --env E2E_TEST_TIMEOUT=180000 -f
+skram run --env LOG_LEVEL=debug my-app build   # before the project works too
+```
+
+It repeats, before or after the project and target, and applies to queued,
+attached (`-f`), and ephemeral runs alike. The last value for a name wins; a
+value may itself contain `=`. The variables are set last, after the
+environment the job inherits, the project's [`env:`](config.md#env), and its
+inputs, so a per-run value beats a configured one of the same name. An
+`--env` after a bare `--` is the target's own argument and is passed through.
+
+A value with no `=`, an empty name, or a name that is not an environment
+name (`^[A-Za-z_][A-Za-z0-9_]*$`) is refused, naming the argument, before
+anything is queued. So is a variable that is one of the project's
+[inputs](config.md#inputs), or its `SKRAM_INPUT_<VAR>_DEFAULT`: an input moves
+only with `-C`, and the message says so.
+
+The variables are recorded as `env` on the queue item, in `status.json`, on
+the `job_start` and `job_end` events, and in every `--json` report that names
+the job or item (`run`, `status`, `queue list`, `wait`, `logs`, `explain`),
+so anyone reading the job can tell what it was given. The field is absent
+when no `--env` was passed. The stored command never carries them: the
+queued child reads them from its item. They take no part in lanes or
+estimate keys, so a job with `--env` shares its target's history.
 
 ## Lanes, and the rule for an item with two resources
 
@@ -338,8 +409,11 @@ doing work now; use a hold when nobody else should start work either.
 
 **A kill** ends one running job. Skram sends SIGTERM to the job's whole
 process group — the script and everything it started — and follows with
-SIGKILL if it is still alive after the grace period. With no argument it kills
-the single running job, or lists them and asks you to choose.
+SIGKILL if it is still alive after the grace period. It takes the job id or
+the item id; with no argument it kills the single running job, or lists them
+and asks you to choose. A pending item has no job to kill, so
+`skram kill q_866bfad7` refuses and names `skram queue cancel q_866bfad7`; a
+job that already finished is refused too, naming how it ended.
 
 **A cancel** withdraws pending items, which never started and have no job
 directory:
@@ -401,6 +475,12 @@ running in `cluster` and three items behind it:
 | `other-app/test` | cluster | cancelled — shares `cluster` |
 | `docker-app/test` | docker | runs — shares no lane with the failure |
 
+`continue` is two-way: set it on a still-pending item — the deploy queued behind a
+deliberately red run — and that item is indifferent to a `stop` failure ahead of it
+in its lane too, so it is not cancelled. A pending item with no `--on-error` of its
+own, and one enqueued outside any project, still follow the queue default and are
+cancelled as above.
+
 A cancelled item records what cancelled it, so `skram queue list`, `skram wait`,
 and `skram explain` all say "after failure of q_…" rather than leaving you to
 guess. After a failure, `skram explain` is the fastest way back: it prints the
@@ -450,9 +530,10 @@ runs that count are used:
 - failed and killed runs are never used — a build that crashed after three
   seconds says nothing about a real one;
 - samples older than 30 days are ignored;
-- Skram's own flags (`-f`, `--now`, and `-C` with its directory) never become
-  part of a key, so attaching to a job, or running it in another checkout,
-  does not fragment its history.
+- Skram's own flags (`-f`, `--now`, `-C` with its directory, and `--env` with
+  its value) never become part of a key, so attaching to a job, running it
+  in another checkout, or giving it its own variables does not fragment its
+  history.
 
 The same estimate appears at enqueue, as the remaining time in `skram status`,
 as the queue and lane ETAs, and as the deadline behind `skram wait --timeout
@@ -490,8 +571,13 @@ directly in a script. Four other codes are Skram's own:
 
 A timeout is worth distinguishing from a failure: the item may simply be
 behind a hold, and on a timeout `wait` says so, naming who holds the queue and
-why. A job you stop with `skram kill` is recorded as killed, so `wait` and
-`run -f` exit 137 for it.
+why. A job you stop with `skram kill` is recorded as killed, with exit code
+137, in its `status.json` and its queue item, so `status`, `queue list`,
+`explain`, and `wait` all say `killed`, and `wait` and `run -f` exit 137 for
+it. A job any other signal ends — the kernel's out-of-memory killer, a `kill`
+from another shell — is recorded the same way, with `reason: signal` and the
+signal's name (`SIGKILL`) as `reason_detail`, which `skram explain` shows. A
+target that exits 137 on its own is a plain failure.
 
 ## The dashboard
 

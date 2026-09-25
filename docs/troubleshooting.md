@@ -5,7 +5,7 @@ most of it:
 
 ```bash
 skram status                    # held? what is running, and who asked for it
-skram queue list                # every item in order, with its actor
+skram queue list                # every item in order, with its id and actor
 skram doctor                    # what this machine still needs
 ```
 
@@ -116,9 +116,9 @@ So an item can be pending while other jobs run — that is correct, not stuck.
 
 ```text
 Running:
-  apps/build  J20260921_195625  (PID 64458, 1s elapsed)  by claude-code
+  apps/build  J20260921_195625_3be1c0  (PID 64458, 1s elapsed)  by claude-code
     Lane: kind-dev
-  api/build  J20260921_195625  (PID 64457, 1s elapsed)  by claude-code
+  api/build  J20260921_195625_9a07d4  (PID 64457, 1s elapsed)  by claude-code
     Lane: kind-staging
 
 Queue: 1 pending, 2 running, 0 completed, 0 failed
@@ -131,9 +131,9 @@ Lanes
 `skram queue list` gives the order within the whole queue:
 
 ```text
-  1. [running] apps/build  by claude-code
-  2. [pending] apps/test  by claude-code
-  3. [running] api/build  by claude-code
+  1. [running] apps/build  q_5c0e2a71 → J20260921_195625_3be1c0  by claude-code
+  2. [pending] apps/test  q_a49121b2  by claude-code
+  3. [running] api/build  q_d3f86b19 → J20260921_195625_9a07d4  by claude-code
 
 1 pending, 2 running, 0 completed, 0 failed
 ```
@@ -166,7 +166,7 @@ it: nothing is scheduled to take that pending item.
 ```text
 No running jobs.
 
-Queue: 1 pending, 0 running, 3 completed, 1 failed
+Queue: 1 pending, 0 running, 3 completed, 0 failed, 1 killed
 ETA: queue clears in ~3s (1 pending)
 ```
 
@@ -178,7 +178,7 @@ What happened to the job that was running when the processor died:
   `running`, correctly. Losing the processor loses the scheduler, not the work.
 - **If its own process died too** — a reboot, rather than the processor alone
   — the next `skram status` reconciles the row: it takes the job's own result
-  when the job wrote one, otherwise it is marked killed. That is the `1 failed`
+  when the job wrote one, otherwise it is marked killed. That is the `1 killed`
   above; the counts no longer lie, so `skram queue reset` is rarely needed.
 - **The pending item starts on the next enqueue.** `skram release` also
   starts a processor when anything is pending.
@@ -257,13 +257,16 @@ each project offers. Discovery is a static read of the project's entry point
 — it never runs the file — so a target only appears if it is written where
 the reader looks: a rule in a `Makefile`, a task in a `Taskfile.yml`, a
 recipe in a `justfile`, or, in an ops script, an arm of the `case … in` block
-that starts in column 0. An ops script's arm has to be on a line of its own,
-optionally followed by a comment that becomes the target's help:
+that starts in column 0. An ops script's arm can open a multi-line body, or
+be written entirely on one line — either way, a trailing comment becomes the
+target's help:
 
 ```bash
 build) # Build the image
     docker build -t app .
     ;;
+
+push) docker push app ;; # Push the built image
 ```
 
 A project with an `expose:` list shows only the targets on it. `skram doctor`
@@ -298,7 +301,7 @@ skram explain
 ```
 
 ```text
-apps/boom  J20260921_195642  [failed] exit=3 (<1s)  by you
+apps/boom  J20260921_195642_7417fd  [failed] exit=3 (<1s)  by you
 Lane: kind-dev
 Reason: unknown — could not reach the cluster
 Last 2 lines (all streams):

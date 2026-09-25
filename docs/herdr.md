@@ -40,7 +40,8 @@ herdr server reload-config
 The row reads `build 1m20s/4m10s · 2 queued` while a job runs for the
 project a workspace pane stands in, in the checkout that pane stands in (a
 job in another worktree shows in that worktree's panes, named
-`build (repo--T-7) …`), or that was enqueued from that workspace. It refreshes every 30 seconds and
+`build (repo--T-7) …`, followed by each [input](config.md#inputs) off its
+default, `build (repo--T-7, my-lib--x) …`), or that was enqueued from that workspace. It refreshes every 30 seconds and
 disappears once the queue is idle.
 
 ```bash

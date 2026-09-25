@@ -19,7 +19,7 @@ Queued web/deploy (item q_2c31477f, 1 pending)
 Estimate: ~3s (from 5 runs · exact); queue clears in ~6s (1 pending)
 $ skram status
 Running:
-  apps/deploy  J20260921_212950  (PID 45006, 0s elapsed)  ~3s remaining (est ~3s · from 7 runs · target)  by you
+  apps/deploy  J20260921_212950_c4a1f3  (PID 45006, 0s elapsed)  ~3s remaining (est ~3s · from 7 runs · target)  by you
     Lane: kind-dev
 By actor: you (sam): 1 running · claude-code: 1 pending
 ETA: queue clears in ~6s (1 pending)

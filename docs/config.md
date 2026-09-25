@@ -81,7 +81,7 @@ so discovery works in a shell hook and on a machine that does not have `make`,
 
 | Key | Targets come from | A target runs as |
 | --- | --- | --- |
-| `script:` | the arms of a column-0 `case … in` block; a trailing `# comment` on the arm is the help text | `bash <file> <target> [args]` |
+| `script:` | the arms of a column-0 `case … in` block, one-line (`deploy) ./do-deploy.sh ;;`) or multi-line, quoted or bare, `a\|b)` alternatives each their own target; a trailing `# comment` on the arm (after `;;` for a one-line arm) is the help text | `bash <file> <target> [args]` |
 | `makefile:` | every name in a `.PHONY:` line and every `target: ## help` rule; with neither, every plain-name rule | `make -f <file> <target> [args]` |
 | `taskfile:` | the top-level `tasks:` keys, minus `internal: true`; `desc:` is the help | `task --taskfile <file> <target> [-- args]` |
 | `justfile:` | column-0 recipes, minus `[private]` and `_`-prefixed names; the comment run above is the help | `just --justfile <file> <target> [args]` |
@@ -168,6 +168,135 @@ Default: empty. The values are added on top of the environment the job
 inherits, so they win over a variable of the same name. They reach queued
 jobs, attached jobs, ephemeral targets, workflow steps, and runs started
 through the MCP server. Values are literal: nothing inside them is expanded.
+One run can override a value for itself alone with
+[`skram run --env NAME=VALUE`](how-it-works.md#per-job-variables---env),
+which is set after `env:` and wins.
+
+### `inputs:`
+
+The other repos this project's targets read, one environment variable each.
+A project whose script builds from one repo and tests from another names both
+here instead of pinning their directories as literals in `env:`.
+
+```yaml
+projects:
+  my-app:
+    path: ~/dev/my-app
+    script: ops.sh
+    inputs:
+      LIB_DIR: my-lib
+      E2E_DIR: my-e2e
+repos:
+  my-lib:
+    remote: my-org/my-lib
+    paths: [~/dev/my-lib, ~/work/my-lib]
+  my-e2e:
+    paths: [~/dev/my-e2e]
+```
+
+Default: empty. The key is the variable, the value the name of an entry under
+[`repos:`](#repos). An input is always the repo's root; a subdirectory is the
+script's business. Each input has a default directory: the first of the repo's
+`paths:` (after `~/` and glob expansion) that exists as a directory on this
+machine, so one file works on two machines that keep their checkouts in
+different places.
+
+The loader refuses, naming the project and the variable:
+
+- a repo that is not under `repos:`, or one with no `paths:`;
+- a variable that `env:` also sets, since the file would have two answers
+  for it;
+- a variable that is not an environment name (`^[A-Za-z_][A-Za-z0-9_]*$`).
+
+A repo none of whose paths exists here is not a load error, since another
+machine may have it: `skram doctor` reports it, one line per project.
+`skram discover` lists each input under its project with the default
+directory; `skram discover --json` carries them as `inputs`, keyed by
+variable, each with `repo`, `default`, and `error` when there is no default.
+
+A job follows each input the way it follows the project's own checkout: to
+the checkout of that repo you stand in, to one you name with `-C <dir>`
+(repeatable, one per repo, and it beats the directory you stand in), and
+otherwise to the default. So from a worktree of `my-lib`,
+`skram run my-app build` builds that worktree, and
+`skram run my-app test -C ../my-lib--x -C ../my-e2e--x` binds both inputs
+from anywhere. See [running in another checkout](how-it-works.md#running-in-another-checkout--c).
+
+`skram discover` follows inputs the same way: run from a checkout of one, or
+with `-C`, it prints the same `input VAR → dir (default …)` line `run`
+prints for each input that resolves off its default, and `skram discover
+--json` adds `dir` (absolute) to that input's object. Nothing extra when
+every input is on its default. The `### Targets: <project>` table
+`install-rules` writes, and the matching `skram://projects/<name>` MCP
+resource, carry one more line for a project with inputs — `` Inputs:
+`LIB_DIR` (repo `my-lib`), `E2E_DIR` (repo `my-e2e`). `` — naming each
+variable and repo, never a machine path, so the table is still a function
+of your config alone.
+
+The target sees each variable set to the directory it resolved to, and
+`SKRAM_INPUT_<VAR>_DEFAULT` (for example `SKRAM_INPUT_LIB_DIR_DEFAULT`) set to
+the default directory, so a script can fall back to the default checkout for
+files a worktree does not have. Both are set after `env:` and the environment
+the job inherits, so they win. This holds for queued, attached (`-f`), and
+ephemeral runs. `skram run --env` refuses an input's variable: `-C` is the
+only way to move an input.
+
+A run is refused, before anything is queued, when an input has no default
+and nothing named a checkout of its repo. `skram run` prints one line on
+stderr for each input that is off its default,
+`input LIB_DIR → /home/me/dev/my-lib--x (default /home/me/dev/my-lib)`, and
+nothing when every input is on its default. Inputs never create a lane or
+change a target's estimate history.
+
+Every job records where its inputs resolved. The queue item, the job's
+`status.json`, its `job_start` and `job_end` events, and every `--json`
+report that names the job or item (`run`, `status`, `queue list`, `wait`,
+`explain`, `logs`) carry `inputs`, keyed by variable, each with `repo`,
+`dir` (the absolute checkout the job read), `default` (the repo's
+default directory, absent when it has none on this machine), `head` (the
+commit `dir` was on when the job was queued), and `head_at_start` (the
+commit it was on when the job started; absent until then). An input on its
+default has `dir` equal to `default`. The key is absent for a project with
+no inputs:
+
+```json
+"inputs": {
+  "E2E_DIR": { "repo": "my-e2e", "dir": "/home/me/dev/my-e2e", "default": "/home/me/dev/my-e2e",
+               "head": "3f9c…", "head_at_start": "3f9c…" },
+  "LIB_DIR": { "repo": "my-lib", "dir": "/home/me/dev/my-lib--x", "default": "/home/me/dev/my-lib",
+               "head": "a1b2…", "head_at_start": "c3d4…" }
+}
+```
+
+Where each input resolved is fixed when the job is queued: editing `paths:`
+while it waits does not move it. What is in that directory is read when the
+job starts, so a commit or checkout in an input's directory while the job
+waits changes what it builds. When `head_at_start` differs from `head` the job still runs, and
+its log gets one warning line per moved input, also written as a `warn`
+event tagged `input_drift`:
+
+```text
+[skram] WARNING: input LIB_DIR HEAD moved between enqueue and start: a1b2… → c3d4… (/home/me/dev/my-lib--x); the job runs what is there now
+```
+
+`explain` shows the move on that input's line under `Inputs:`, lists the
+moved variables as `inputs_drifted` in `--json`, and after a failure adds a
+hint naming the commit the job actually ran. This covers an input on its
+default too: the configured checkout switching branch under a pending job
+is visible the same way. An input whose directory is gone (or is no longer
+a git checkout) when the job's turn comes fails the job without running,
+with the reason `checkout_removed` and a detail naming the variable and the
+directory; `explain` suggests re-running with `-C` naming another checkout
+of that repo, or its default.
+
+Human output names each input that is off its default by its directory
+name, after the project's own checkout when that is off `path:` too, in
+variable order: `my-app/build (my-lib--x)`, or
+`my-app/build (my-app--feature, my-lib--x)`. When every input is on its
+default the label is the same as for a project without inputs. `status`,
+`queue list`, `logs -F`, `explain`, `skram tui`, the dashboard, and the
+[herdr](herdr.md) sidebar all use this label; `explain` also lists every
+input with its directory and default under `Inputs:`.
 
 ### `guard:`
 
@@ -294,14 +423,30 @@ skram workflow run deploy-stack -f            # attach; the exit code is the wor
 skram workflow run deploy-stack --json        # the enqueue report, with its lanes
 skram wait --last                             # or wait on the item id
 skram workflow run deploy-stack -C ../api--feature   # api's steps in that worktree
+skram workflow run deploy-stack -C ../lib--x -C ../e2e--x   # each step's inputs follow
 ```
 
 Run from inside another checkout of a step's repo (a worktree, a second
 clone), the steps whose project is in that repo run there, from that
 checkout's own backend file, and every other step runs in its `path:`;
-`-C, --checkout <dir>` names the checkout explicitly and is refused when it
-belongs to no step's repo. The item and `status.json` then carry `checkout`,
-and the workflow shows as `_workflow/<name> (<checkout dir name>)`.
+`-C, --checkout <dir>` names the checkout explicitly. The item and
+`status.json` then carry `checkout`, and the workflow shows as
+`_workflow/<name> (<checkout dir name>)`; when steps of two repos each run in
+a checkout of their own, `checkout` names the first step's.
+
+Steps follow [inputs](#inputs) the same way. `-C` may be given more than once,
+one directory per repo, and each step resolves its own project's checkout and
+inputs from that one list and the directory you stand in, exactly as
+`skram run` does for that project: a `-C` of a repo the step's project
+neither lives in nor reads is ignored for that step, and a step whose project
+has no inputs is untouched. Each step's child gets its own input variables
+and `SKRAM_INPUT_<VAR>_DEFAULT`, as a `skram run` child does. A `-C` that no
+step's repo or inputs can use is refused, naming the steps' projects and
+their input repos. The item and `status.json` carry `inputs`, the union of
+every step's; two steps whose projects bind one variable to different
+checkouts (the same variable name on two different repos) are refused at
+enqueue, since the record has one answer per variable: rename the input in
+one of the projects.
 
 The job's directory under `logs_dir:` has an event per step, its
 `status.json` names the workflow as `_workflow/<name>`, and its exit code is
@@ -325,6 +470,7 @@ reaper:
     - multiarch
   after_targets:
     - 'my-app/build*'
+  timeout: 5m
 ```
 
 | Key | Default | What it does |
@@ -336,6 +482,7 @@ reaper:
 | `cache_budget:` | `20GB` | the build cache each builder is pruned down to |
 | `builders:` | empty | extra buildx builders to prune besides the default one, which is always pruned. A builder that is not present is skipped |
 | `after_targets:` | empty | `project/target` glob patterns. After a job whose project and target match one, and only when it succeeded, a reap runs inside that job |
+| `timeout:` | `5m` | the budget an automatic reap runs its whole pass under, and the per-call cap on every destructive docker call it makes (`rmi`, and the image/builder/buildx prunes — a big removal or a cache prune down to budget can legitimately take a while). A read-only call (`image ls`, `buildx inspect`, `system df`) is capped at a shorter, fixed 30s instead, so a wedged Docker daemon is killed rather than left to hang the job's lane. A `system df` past its cap only skips the disk usage report. On any other expiry the reap logs which step timed out and stops there, and the job's own exit code is unchanged |
 
 ```bash
 skram reap --dry-run            # list what would be removed
@@ -347,6 +494,12 @@ job. Removing a tag that is in use is logged and skipped. A structural problem
 `image_repos:` — fails the command, and is a log line when the reap runs after
 a job. One `SKRAM_*` variable skips automatic reaps without editing the file;
 [troubleshooting](troubleshooting.md) lists it.
+
+A docker call that hangs past its cap is killed either way — the 30s query
+cap or, for a removal or a prune, `timeout:`. Run by hand, `skram reap`
+reports that expiry as an error and exits non-zero; inside a job it is the
+same "structural problem" case above, so it stops the reap and the automatic
+pass logs one line naming the step, without failing the job.
 
 ## `repos:`
 
@@ -444,14 +597,14 @@ message instead of a surprise.
 ```bash
 skram doctor                    # projects, paths, targets, data directories
 skram discover                  # every project with the targets it exposes
-skram discover --json           # the same, with resources and the ephemeral flag
+skram discover --json           # the same, with resources, inputs, and the ephemeral flag
 skram discover -C ../my-app--feature   # read a worktree's own files for its repo's projects
 ```
 
 `skram doctor` is the one to run after an edit. It reports a path that does
 not exist, a backend file it cannot find, an `expose:` or `ephemeral:` name
-that is not a target, a repo with no checkout here, and a path whose casing
-differs from disk.
+that is not a target, a repo with no checkout here, an input with no default
+directory here, and a path whose casing differs from disk.
 
 Back to the [documentation index](README.md), or the
 [README](../README.md) for installing Skram and the first loop.
