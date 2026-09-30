@@ -28,7 +28,7 @@ No running jobs.
 HELD by you: debugging the cluster by hand (0s)
 
 Queue: 2 pending, 0 running, 0 completed, 0 failed
-ETA: queue clears in ≥<1s (2 pending, 2 without history)
+ETA: no queue estimate yet (2 pending, 2 without history)
 ```
 
 An agent that enqueued with `--json` was told at the time. The reason travels
@@ -131,9 +131,9 @@ Lanes
 `skram queue list` gives the order within the whole queue:
 
 ```text
-  1. [running] apps/build  q_5c0e2a71 → J20260921_195625_3be1c0  by claude-code
-  2. [pending] apps/test  q_a49121b2  by claude-code
-  3. [running] api/build  q_d3f86b19 → J20260921_195625_9a07d4  by claude-code
+  1. [running] apps/build [kind-dev]  q_5c0e2a71 → J20260921_195625_3be1c0  by claude-code
+  2. [pending] apps/test [kind-dev]  q_a49121b2  by claude-code
+  3. [running] api/build [kind-staging]  q_d3f86b19 → J20260921_195625_9a07d4  by claude-code
 
 1 pending, 2 running, 0 completed, 0 failed
 ```
@@ -142,6 +142,14 @@ Item 2 waits because item 1 has `kind-dev`. Item 3 runs anyway because its
 lane is a different one. If you did not expect two projects to share a lane,
 check their `resource:` values; if you expected them to share one and they do
 not, they are in different lanes by accident.
+
+A job sent to another machine waits in that runner's own lane,
+`<resource>@<runner>` (`kind-dev@studio`), so it never waits behind this
+machine's jobs on the resource. A pending item that `queue list` marks
+`waiting for …` or `waiting for lease …`, or that `status` lists under
+"Waiting for a runner:" or "Waiting for a lease on a runner:", is waiting on
+the other machine, not stuck here: see [When the runner is off](runners.md#when-the-runner-is-off)
+and [Sharing a resource with the runner](runners.md#sharing-a-resource-with-the-runner).
 
 To stop waiting: wait for the lane, take the item back, or end the job ahead
 of it.
@@ -410,6 +418,7 @@ set for normal use.
 | `SKRAM_HERDR` | Exactly `0` turns off herdr reporting — the row the processor keeps in each workspace's sidebar. Any other value leaves it on. | unset (on where herdr is installed) | the processor's herdr reporter, and `skram doctor` |
 | `SKRAM_NOTIFY` | Exactly `0` turns off job-end notifications, herdr and macOS alike. Any other value leaves them on. | unset (on) | the job-end notification, and `skram doctor` |
 | `SKRAM_REAP_DISABLE` | Exactly `1` skips the automatic reap that runs inside a job matching `reaper.after_targets`. `skram reap` run by hand is unaffected. | unset (automatic reap on where configured) | the post-job reap |
+| `SKRAM_SSH` | The program every call to a [runner](runners.md) goes through, git's included, invoked as `<program> <destination> <command>`. | unset (`ssh`) | the processor, when it sends a job to a runner |
 
 When `SKRAM_ACTOR` is unset the actor is worked out from the environment the
 caller is already in, first match winning: `CLAUDECODE` or `CLAUDE_CODE` set

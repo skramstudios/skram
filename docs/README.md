@@ -34,6 +34,9 @@ skram discover                  # every project, target, and typical duration
   branch on.
 - [MCP](mcp.md) — the tools `skram mcp` serves, the JSON each one takes and
   returns, and the resources it exposes.
+- [Runners](runners.md) — sending a job to another machine over SSH with
+  `--runner`: declaring one, what travels and what stays, where the runner
+  keeps things, and the SSH program every call goes through.
 - [herdr](herdr.md) — the sidebar row the processor keeps, the plugin actions, and
   the key bindings for them.
 - [Notifications](notifications.md) — the one-time macOS setup that makes job-end

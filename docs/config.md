@@ -298,6 +298,22 @@ default the label is the same as for a project without inputs. `status`,
 [herdr](herdr.md) sidebar all use this label; `explain` also lists every
 input with its directory and default under `Inputs:`.
 
+### `runner:`
+
+```yaml
+projects:
+  api:
+    path: ~/src/api
+    makefile: Makefile
+    runner: build-box
+```
+
+The [runner](runners.md#a-projects-default-runner) this project's jobs go to
+when a run names none: a key of the top-level [`runners:`](#runners) block.
+Empty (the default) runs jobs on this machine, and `--runner local` runs one
+here whatever the project says. A name that is not in `runners:` is a config
+error. An ephemeral target always runs here.
+
 ### `guard:`
 
 The guard is a shell hook. It reads a command an agent is about to run and
@@ -571,6 +587,33 @@ lock file that guards it, `queue-history/` (archived queue files), and
 
 Point everything that shares a resource at one `queue_dir:`. Two settings mean
 two queues, two processors, and two jobs on the same resource at once.
+
+## `runners:`
+
+```yaml
+runners:
+  build-box: {}
+  studio:
+    ssh: me@studio.example.net
+```
+
+The machines `skram run --runner <name>` may send a job to, by name. `ssh:` is
+the destination handed to the SSH program; it defaults to the name. `local`
+is reserved for this machine. What a runner receives and keeps is in
+[Runners](runners.md).
+
+## `accept_runner_jobs:`
+
+```yaml
+accept_runner_jobs: false
+```
+
+Default `true`. Set on a machine other machines send jobs to (a
+[runner](runners.md)), `false` makes it decline every one: the job fails at
+once with reason `runner_declined` on the machine that sent it. Only the file
+at the default path counts, read by the Skram that runs jobs there, and a
+missing or unreadable file accepts. See
+[Declining runner jobs](runners.md#declining-runner-jobs).
 
 ## Blocks another product owns
 

@@ -112,8 +112,10 @@ Output:
 ```
 
 `backend` is `script`, `make`, `task`, or `just`, and `file` is the file the
-targets were read from. `resources` are the lanes this project's jobs occupy:
-two projects that name the same resource never run at the same time.
+targets were read from. `resources` are the shared resources this project's
+jobs need: two projects that name the same resource never run at the same
+time. A job sent to a runner waits in that runner's own lane,
+`<resource>@<runner>`, instead.
 
 A target with no `estimate_seconds` has no usable history yet.
 `estimate_level` says where the number came from — `exact` for that exact
@@ -208,8 +210,12 @@ Output, with one job running and one item waiting behind it:
 
 The top-level `actor` is who is asking. `by_actor` is who is waiting, which is
 the field that answers "is a person blocked behind me". `most_recent` is the
-last item to finish. `lanes` lists one entry per resource with anything live on
-it, and the queue's `eta_seconds` is the longest lane's.
+last item to finish. `lanes` lists one entry per lane with anything live on
+it (its `resource` is the lane's name, `cluster@studio` for jobs sent to a
+runner), and the queue's `eta_seconds` is the longest lane's. A running job
+sent to a runner carries `runner`; `leases` lists the leases held on this
+machine, and `waiting_for_runner` and `waiting_for_lease` the items waiting
+on a runner.
 
 While the queue is on hold, `queue` carries a `hold` as well:
 
@@ -265,6 +271,13 @@ an environment name or is one of the project's
 [inputs](config.md#inputs) (see
 [per-job variables](how-it-works.md#per-job-variables---env)).
 
+`runner` sends the job to another machine, as `--runner` does on the CLI: the
+name of an entry in the config's `runners:` (`local` runs it here). Left
+out, the project's own `runner:` applies, if it has one. A name that is not
+configured is an error result naming the ones that are, and an ephemeral
+target with a named runner is refused. `wait`, `logs`, and `explain` then work
+as for any job. See [Runners](runners.md).
+
 For a project with [inputs](config.md#inputs) — other repos its targets
 read — pass `checkouts` instead: a list of directories, one per repo,
 resolved the same way (absolute, or relative to the server's own cwd) and
@@ -294,6 +307,7 @@ The call returns as soon as the item is queued. It does not wait:
   "actor": "claude-code",
   "pending": 1,
   "resources": ["docker"],
+  "lanes": ["docker"],
   "lane_pending": 0,
   "estimate_seconds": 12,
   "estimate": "~12s (from 1 run · exact)",
@@ -327,6 +341,7 @@ and says so:
   "actor": "claude-code",
   "pending": 1,
   "resources": ["docker"],
+  "lanes": ["docker"],
   "lane_pending": 0,
   "estimate_seconds": 1,
   "queue_eta_seconds": 1,
@@ -372,8 +387,8 @@ Input, all optional:
 ```
 
 `ref` is an item id (`q_…`) or a job id (`J…`). With no `ref` it waits for the
-whole queue; with `resource` it waits for one lane instead, and `ref` and
-`resource` cannot both be given. `timeout_seconds` defaults to 1800 and is
+whole queue; with `resource` it waits for one lane instead (a resource name,
+or `<resource>@<runner>`), and `ref` and `resource` cannot both be given. `timeout_seconds` defaults to 1800 and is
 capped at 3600; a good choice is `run`'s `estimate_seconds` doubled, at least
 600.
 
@@ -404,7 +419,10 @@ Output for an item that finished:
 | `timeout` | `timeout_seconds` elapsed and it is still going |
 
 A timeout is not a failure and not an error — the job is still going, and
-calling `wait` again is the right response:
+calling `wait` again is the right response. An item still waiting for its
+runner to answer, or for a lease on it, carries `waiting_for_runner` or
+`waiting_for_lease`; that is expected, so wait again rather than queueing it a
+second time:
 
 ```json
 {
@@ -465,6 +483,7 @@ Output for a job that failed:
   "target": "test",
   "actor": "claude-code",
   "resources": ["docker"],
+  "lanes": ["docker"],
   "status": "failed",
   "exit_code": 1,
   "duration_ms": 16,
@@ -485,8 +504,9 @@ Output for a job that failed:
 ```
 
 `reason` is the classifier's verdict — `test_failure`, `compilation`,
-`dependency`, `docker_build`, `k8s_rollout` and so on — and `reason_detail` is
-the line it keyed on. `tail_stream` is `stderr` when the job wrote any and
+`dependency`, `docker_build`, `k8s_rollout` and so on, or for a job sent to a
+runner `runner_unreachable`, `runner_refused`, `runner_lost`, or
+`runner_declined` — and `reason_detail` is the line it keyed on. `tail_stream` is `stderr` when the job wrote any and
 `all` when it did not.
 
 A job still running explains itself too, with the estimate and how to follow
@@ -500,6 +520,7 @@ or stop it:
   "target": "deploy",
   "actor": "claude-code",
   "resources": ["docker"],
+  "lanes": ["docker"],
   "status": "running",
   "estimate_seconds": 12,
   "tail_stream": "all",
@@ -523,6 +544,7 @@ queue is on hold, who held it and what they said:
   "target": "build",
   "actor": "claude-code",
   "resources": ["docker"],
+  "lanes": ["docker"],
   "status": "pending",
   "tail": [],
   "next": [

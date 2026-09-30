@@ -5,6 +5,103 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-30
+
+This release sends jobs to other machines. The queue stays on the machine
+you work on; a job can run on any machine you reach over SSH, and each
+resource is still used by one job at a time, wherever the jobs come from.
+See `docs/runners.md`.
+
+- **Breaking:** `skram metrics up` runs the Prometheus exporter as a
+  process on this machine instead of in the compose stack, listening on
+  port 2112 (`--addr` changes it); `skram metrics down` and `skram metrics
+  status` stop and report it with the rest of the stack. Before starting
+  compose, `metrics up` writes a Prometheus file_sd targets file naming this
+  machine and every runner, each labelled `machine`, and passes its
+  directory as `SKRAM_METRICS_TARGETS_DIR`, so one Prometheus can scrape
+  every machine that runs `skram metrics up`. A compose file written for an
+  earlier release must drop its exporter service and mount that directory
+  into Prometheus; see "The metrics stack" in `docs/how-it-works.md`.
+- A job can run on another machine, a **runner**. Name the machines you
+  reach over SSH under `runners:` in the config, then `skram run --runner
+  build-box api test` queues the job here as usual and, when its turn
+  comes, runs it there. `wait`, `logs -F`, `run -f`, `explain`, `status`,
+  and `kill` work as they do for any job: the output streams back as it
+  prints, and the job's `raw.log`, `events.jsonl`, and `status.json` are
+  copied home when it ends. A project can name a default with `runner:`,
+  `--runner local` runs one job here instead, and the MCP `run` tool takes
+  `runner`. Labels show where a job ran (`api/test @build-box`). Skram copies
+  itself to the runner, which needs only `git`, your tools, an SSH login
+  without a prompt, and the same OS and CPU architecture as this machine.
+  The job's `PATH` is the runner's login shell's, so what `~/.zprofile`
+  adds there reaches it.
+- What a runner receives is the commit you are on, plus your uncommitted
+  edits and any files git does not ignore that you have not added yet. Files
+  git ignores, such as `node_modules`, build output, and `.env` files, are
+  never sent, and nothing changes in your branches, tags, remotes, or index.
+  The runner keeps one working copy per checkout, so ignored caches survive
+  between jobs there. A project with `inputs:` sends each input's checkout
+  the same way, and `sent` in the job's `--json` output names the exact
+  commit that ran. The project's `env:` and `--env` travel with the job.
+- A job sent to a runner has its own lane, `<resource>@<runner>`
+  (`cluster@studio`): a local job and a job sent to another machine on the
+  same resource run at once, and two jobs sent to one runner take turns.
+  `skram status`, `skram queue list`, `skram run`, `skram explain`, and the
+  TUI name the lane (`lanes` in `--json`, beside `resources`, which stays
+  the resource names), and `skram wait --resource cluster@studio` and
+  `skram kill --resource cluster@studio` take it. `skram queue list` now
+  shows a queued or running job's lanes after its label (`[cluster]`)
+  whenever they are not just its project's name.
+- On the machine that has a resource, a job sent there and a job queued
+  there never run at once: each resource has a lease on that machine, taken
+  by its own jobs and by jobs sent to it alike. When a job you send finds
+  the resource busy there, nothing starts and nothing fails: the item waits
+  at the head of its lane and is sent once the resource is free, and `skram
+  status`, `skram queue list`, and `skram wait` (`waiting_for_lease` in
+  `--json`) say which job holds it, from which machine, since when, and
+  when it should be done. The runner's own queued job waits the same way
+  and starts by itself, and `skram status` there lists the leases held by
+  jobs sent from another machine (`leases` in `--json` has every one). A lease whose job died, or one
+  taken before the machine last booted, is taken over by the next job that
+  needs the resource.
+- A runner that is off does not fail your job: the item waits at the head
+  of its lane (`waiting_for_runner`), Skram asks again about once a minute,
+  and `skram status` shows the wait; `skram queue cancel` withdraws it as
+  usual. A connection that drops while a job runs is reattached (at once,
+  then after 15 and 45 seconds) with no line of the log lost or repeated;
+  if it cannot be, the job fails as `runner_lost`, and the next time Skram
+  reaches that runner it stops the job there and copies its files home. A
+  runner that answers but cannot take the job fails it as
+  `runner_unreachable` or `runner_refused`, and `skram explain` says why.
+- A machine's owner can set `accept_runner_jobs: false` in their own config
+  file, and every job any machine sends it fails at once with reason
+  `runner_declined`, with nothing run there; `skram explain` names the
+  runner and the setting. A job already running there finishes and comes
+  home. Removing the key, or setting it `true`, makes the machine a runner
+  again. `docs/runners.md` also notes how Tailscale SSH fits: it is off per
+  device until turned on, and the plan limits.
+- `skram doctor` reports each runner: whether it answers, its OS and
+  architecture, its Skram build against this one, and whether it declines
+  jobs.
+- The exporter reads the queue and the leases as well as finished jobs:
+  `skram_queue_wait_seconds` is how long each job waited from enqueue to
+  start, per project, lane, and runner; `skram_lane_busy` and
+  `skram_queue_pending_items` say whether each lane is in use and how many
+  items wait in it; `skram_lease_held` is 1 for each resource whose lease a
+  job holds, labelled with the machine that job came from (`holder_machine`)
+  and whether it was sent from another machine (`inbound`).
+  `skram_jobs_total` and `skram_job_duration_seconds` gain a `runner` label
+  (`local` for a job that ran here). Every job's `status.json` now records
+  `queued_at`, so the wait is known after the queue archives the item.
+  `docs/how-it-works.md` lists every metric with example queries.
+- Fixed: the exporter labelled queued jobs with project `--foreground`
+  instead of their project and target.
+- Fixed: `skram status` and `skram run` printed `queue clears in ≥<1s` when
+  nothing queued had run before; they now say `no queue estimate yet`.
+- The README's recording shows a run enqueued from a worktree landing in the
+  same lane, and the README names checkout runs, `-C`, `inputs:`, and
+  `--env`.
+
 ## [0.18.0] — 2026-09-25
 
 - **Breaking:** a job that was killed is now recorded as `killed` with exit

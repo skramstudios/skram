@@ -113,9 +113,9 @@ licences of the Go modules built into it.
 No. There is no telemetry, no analytics, no crash reporting, and no update
 check. Nothing in the binary makes an outbound request on its own — not at
 startup, not when a job ends, not ever. Your config file, your queue, and
-your job logs stay on the machine.
+your job logs stay on your machines.
 
-Three parts of skram involve a network socket at all, and each of them only
+Four parts of skram involve a network socket at all, and each of them only
 when you ask for it:
 
 - **`skram dashboard`** with no `--local` opens a tunnel through
@@ -124,11 +124,20 @@ when you ask for it:
   for it. That is a real outbound connection to a third party, and it is the
   only one in the product. `skram dashboard --local` opens no tunnel and
   binds to this machine.
-- **Checking the monitoring stack** makes one request to
-  `http://localhost:2112/health` on this machine, to see whether the
-  Prometheus exporter is answering. It goes to loopback and nowhere else.
-- **The Prometheus exporter**, once you start it, listens on a local address
-  for a scraper to come to it. It sends nothing itself.
+- **Checking the monitoring stack** (`skram metrics up` and `skram metrics
+  status`) asks this machine's exporter for `/health` on `localhost`, to see
+  whether it is answering. It goes to loopback and nowhere else.
+- **The Prometheus exporter**, once `skram metrics up` starts it, listens on
+  port 2112 of every interface, so the Prometheus on another machine that
+  lists this one under `runners:` can scrape it. It sends nothing itself,
+  and `/metrics` carries job counts and durations by project, target, and
+  runner, queue wait and pending counts per lane, and the name of the
+  machine whose job holds each resource's lease. No job output and no paths.
+- **Runners.** A job you send with `--runner` (or through a project's
+  `runner:`) connects over SSH to the machine you named under `runners:`,
+  using your own `ssh` and its config. It carries that job's commit and
+  uncommitted edits, its `env:` and `--env` values, and the job's logs on
+  the way back, and goes nowhere else. See [Runners](runners.md).
 
 Two more things worth naming because they look like network calls and are
 not. The MCP server (`skram mcp`) talks to the agent that started it over
@@ -165,8 +174,11 @@ No. One machine, one queue. The queue is a file on local disk guarded by
 process id — neither survives being pointed at a shared filesystem, where
 locking is not dependable and a process id from another host means nothing.
 
-Two machines that share a cluster therefore do not take turns through skram
-today. Each machine serialises its own callers against it.
+Two machines still take turns on a resource, through a runner: a job one
+machine sends to another takes that resource's lease on the machine that
+has it, so it never overlaps a job queued there. See [Sharing a resource
+with the runner](runners.md#sharing-a-resource-with-the-runner). Without a
+runner, each machine serialises only its own callers.
 
 ## Where do I report a problem?
 

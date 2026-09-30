@@ -45,8 +45,8 @@ Every job gets a directory named after its job id, under the logs directory
   events.jsonl   one JSON object per line: job_start, a log event per output
                  line (with its stream), job_end with status and duration
   status.json    the job's record: command, project, target, actor, PID,
-                 checkout, start and end times, exit code, duration,
-                 failure reason
+                 checkout, when it was queued (queued_at), started, and
+                 ended, exit code, duration, failure reason
 ```
 
 The job id is the date and time the job started plus a random suffix, so a
@@ -367,6 +367,14 @@ skram wait --resource cluster     # block until that lane is empty
 skram kill --resource cluster     # kill whatever is running in it
 ```
 
+A job sent to a runner is not in the resource's lane here: it waits in that
+runner's own lane, `<resource>@<runner>` (`cluster@studio`), so a local job
+and a sent job on one resource run at once, and two jobs sent to one runner
+take turns. `--resource cluster@studio` addresses that lane. On the machine
+that has the resource, a lease keeps its own jobs and the jobs sent to it
+from overlapping; a local item waits while a job sent from another machine
+holds the lease. See [Sharing a resource with the runner](runners.md#sharing-a-resource-with-the-runner).
+
 ## Hold, drain, kill, cancel
 
 Four different things stop work, and they are not interchangeable.
@@ -615,18 +623,69 @@ Skram can export its job history as Prometheus metrics and bring up a local
 stack to look at them:
 
 ```bash
-skram metrics up            # docker compose up -d, then print the URLs
-skram metrics status        # what the compose project has running
-skram metrics down          # stop it
+skram metrics up            # start the host exporter, write the scrape targets, docker compose up -d
+skram metrics status        # the host exporter's health, then what the compose project has running
+skram metrics down          # stop the host exporter and the compose project
+skram metrics up --addr :9112   # the host exporter on another port
 ```
 
-Read this part before you try it. **The stack is not in the release
+The exporter is a Skram process on this machine, not a container. `metrics
+up` starts it detached, records its PID and
+address in `exporter-state.json` in the data directory, sends its output to
+`exporter.log` beside it, and waits until it answers `/health`; running `up`
+again replaces it. It reads the logs directory straight off the disk and
+serves `/metrics` and `/health` on port 2112 of every interface (`--addr`
+changes that), so another machine's Prometheus can reach it.
+
+It reads the job dirs, `queue.json`, and the lease files and serves:
+
+| Metric | Type | Labels | What it counts |
+|---|---|---|---|
+| `skram_jobs_total` | counter | `status`, `project`, `reason`, `runner` | jobs that ended |
+| `skram_job_duration_seconds` | histogram | `project`, `target`, `runner` | how long each job ran |
+| `skram_jobs_in_flight` | gauge | | jobs running now |
+| `skram_queue_wait_seconds` | histogram | `project`, `lane`, `runner` | enqueue to start, per job once it has ended |
+| `skram_lane_busy` | gauge | `lane` | 1 while a job holds the lane, else 0 |
+| `skram_queue_pending_items` | gauge | `lane` | items waiting in the lane |
+| `skram_lease_held` | gauge | `resource`, `holder_machine`, `inbound` | 1 while a job from `holder_machine` holds the resource's lease on this machine, else 0 |
+| `skram_exporter_last_scan_unix` | gauge | | when the exporter last read the disk |
+| `skram_exporter_parse_errors_total` | counter | | `events.jsonl` lines that were not JSON |
+
+`runner` is the runner a job was sent to, or `local` for a job that ran on
+this machine. The wait is `queued_at` to `started_at` in the job's
+`status.json`, counted once when the job has completed, failed, or been
+killed, so it survives the queue archiving the item and an attempt that
+never started is not counted; a job on two lanes is counted in both. A `lane`
+is a resource name, or `<resource>@<runner>` for a job sent to a runner. A
+lane stays at 0 once the exporter has seen it,
+rather than disappearing when its items leave the queue, so an average over
+time is the share of that time it was busy. `skram_lease_held` reads the
+lease files without changing them: a lease whose job has died is not
+counted, and a holder that has been seen reads 0 once its lease is released,
+so `inbound` is `true` for a job sent here from another machine's queue and
+`false` for a job of this machine's own.
+
+Some queries over these, with the `machine` label the scrape targets carry:
+
+```promql
+# share of the last hour each lane was busy
+avg by (machine, lane) (avg_over_time(skram_lane_busy[1h]))
+# p90 wait per lane over the last day
+histogram_quantile(0.9, sum by (le, machine, lane) (increase(skram_queue_wait_seconds_bucket[1d])))
+# jobs per runner over the last day
+sum by (runner) (increase(skram_jobs_total[1d]))
+# who holds each resource now
+skram_lease_held == 1
+```
+
+Read this part before you try the rest. **The stack is not in the release
 archive.** `skram metrics up` runs `docker compose` against the first
 `monitoring/docker-compose.yml` it finds, looking in the data directory
 (`~/.local/share/skram/monitoring/docker-compose.yml`), then beside the
 binary, then in the directory you are standing in. An archive that carries
 only the binary, the licences, the completions, and the herdr plugin has none
-of those, so all three commands fail with:
+of those, so `up` starts nothing, and `status` and `down` stop at the compose
+step, with:
 
 ```text
 Error: monitoring stack not found: docker-compose.yml not found — ensure
@@ -634,11 +693,24 @@ monitoring/ directory exists in skram data dir (…) or current directory
 ```
 
 To use it, write that compose file yourself. Skram runs `docker compose` on
-it with the logs directory passed in as `SKRAM_LOGS_DIR`, so the services can
-mount the job records read-only; everything else about the stack is yours to
-decide. The URLs `metrics up` prints afterwards assume Grafana on 3333,
-Prometheus on 9090, Loki on 3100, and a job-metrics exporter on 2112, so
-those are the ports to publish if you want the printed links to work.
+it with two directories passed in: the logs directory as `SKRAM_LOGS_DIR`, so
+the services can mount the job records read-only, and the scrape targets
+directory as `SKRAM_METRICS_TARGETS_DIR`
+(`~/.local/share/skram/metrics/targets`). Before it runs compose, `metrics
+up` writes `skram.json` there, a Prometheus
+[file_sd](https://prometheus.io/docs/guides/file-sd/) list: this machine's
+exporter as `host.docker.internal:2112`, then each entry under `runners:` at
+port 2112 of its `ssh:` host (the `user@` and any port dropped), each with a
+`machine` label (this machine's host name, or the runner's name). Mount that
+directory into Prometheus and point a `file_sd_configs` job at it; on Linux
+the Prometheus service needs `extra_hosts: ["host.docker.internal:host-gateway"]`
+to reach the host. A runner is scraped only when its own exporter is running,
+so run `skram metrics up` there too, and its host name has to resolve from
+inside the container. If compose fails, `up` stops the exporter again, so
+the stack is up whole or not at all. Everything else about the stack is yours
+to decide. The URLs `metrics up` prints afterwards assume Grafana on 3333,
+Prometheus on 9090, and Loki on 3100, so those are the ports to publish if
+you want the printed links to work.
 
 Nothing else in Skram depends on any of this. The job records the stack would
 read are the same ones `skram status`, `skram logs`, and `skram explain`

@@ -27,7 +27,7 @@ ETA: queue clears in ~6s (1 pending)
 
 Two projects, two callers, one cluster: the second run waited its turn.
 
-![Two callers enqueue the same target, a hold with a reason, and status naming who asked](docs/demo.gif)
+![Two callers enqueue the same target, one from its own worktree, then a hold with a reason and status naming who asked](docs/demo.gif)
 
 ## What holds its own
 
@@ -171,6 +171,17 @@ One session per checkout, an agent in each, all deploying to one cluster:
   touches two lists both. `skram wait --resource kind-dev` and
   `skram kill --resource kind-dev` then address that lane alone.
 - Agents enqueue and `wait`; you enqueue with `-f` when you want to watch.
+- An agent in a worktree or another clone runs `skram run <target>` where it
+  stands: the job runs that checkout's own files, in the same lane as every
+  other checkout of the repo, and is labelled with it (`api/build (api--fix)`).
+  `-C <dir>` names a checkout from anywhere. A project whose targets read
+  another repo declares it under `inputs:`, and each run binds that repo's
+  checkout the same way. See [running in another
+  checkout](docs/how-it-works.md#running-in-another-checkout--c) and
+  [`inputs:`](docs/config.md#inputs).
+- `--env NAME=VALUE` sets a variable for one job only, over the project's
+  `env:`, and is never stored in the command
+  ([per-job variables](docs/how-it-works.md#per-job-variables---env)).
 - Only a target you listed as `ephemeral:` skips the queue, which is your
   promise that it is read-only.
 - `--on-error stop` cancels the pending items in the failed job's lanes — every
@@ -180,6 +191,7 @@ One session per checkout, an agent in each, all deploying to one cluster:
 
 | | | |
 | --- | --- | --- |
+| `skram run --runner <name>` | run a job on another machine over SSH: it waits in its own lane here, your uncommitted work goes with it, its output streams back, and a resource on that machine is still used by one job at a time | [runners](docs/runners.md) |
 | `skram agent guard` | a Claude Code and Cursor shell hook: it blocks the ops script, a known `make`/`task`/`just` target, and `kubectl` and `docker` mutations, and prints the `skram run` line instead | [installing it](docs/agent-setup.md) |
 | `skram tui` | running jobs and their logs, a launcher, and the queue, in the terminal | [as a popup](docs/herdr.md) |
 | `skram workflow list`, `skram workflow run` | a DAG of targets, defined under `workflows:`, queued as one job that holds every lane its steps need | [the keys](docs/config.md) |
@@ -187,7 +199,7 @@ One session per checkout, an agent in each, all deploying to one cluster:
 | `skram prune` | remove old job directories; running jobs and anything the queue still refers to are kept | [defaults](docs/troubleshooting.md) |
 | `skram reap` | reclaim Docker disk space so repeated image builds cannot fill the daemon's disk | [budgets](docs/config.md) |
 | `skram dashboard` | a monitoring UI with live log streaming; `skram dashboard status` and `skram dashboard stop` manage it | [details](docs/how-it-works.md) |
-| `skram metrics up` | a Prometheus, Grafana, Loki, and Vector stack from a compose file you supply | [what it needs](docs/how-it-works.md) |
+| `skram metrics up` | a Prometheus exporter on this machine, plus a Prometheus, Grafana, Loki, and Vector stack from a compose file you supply that scrapes it and every runner | [what it needs](docs/how-it-works.md) |
 | herdr | the processor keeps the running job in each workspace's sidebar row, and the TUI opens as a popup | [bindings](docs/herdr.md) |
 | notifications | on job end, through herdr in a session or macOS otherwise | [setup](docs/notifications.md) |
 
@@ -200,8 +212,11 @@ its own and reads its own blocks of the same config file.
 ## What it is not
 
 Skram is not a CI system, not a durable workflow engine, and not a
-per-project task runner. It does not do parallel groups, remote execution,
-or input-hash caching (yet, or ever, respectively).
+per-project task runner. Lanes run side by side, but each runs one job at a
+time: there are no pueue-style slots for several jobs in one lane. It runs
+a job on another machine only when you send it there; it never picks a
+machine for you. It will never skip a target by input hash, because its
+targets change clusters rather than build files.
 
 If you only need a shell job queue for one terminal, use
 [pueue](https://github.com/Nukesor/pueue). Skram is for when several
