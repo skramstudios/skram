@@ -191,15 +191,31 @@ skram: /home/you/dev/apps/ops.sh runs outside the queue. Use: skram run apps bui
 then skram wait <item_id>. Ephemeral (read-only) targets are exempt; see skram discover.
 ```
 
-A command is broken on `;`, `&&`, `||`, and `|` and each part judged
-separately, and wrappers (`sudo`, `env`, `bash`, `time`, …) and leading
-`NAME=value` assignments are stripped first, so `sudo docker build .` is still
-a `docker build`.
+The guard parses the command as a shell would and judges every command in
+it: each part of a `;`, `&&`, `||`, or `|` list, and what runs inside
+`( … )`, `$( … )`, and backticks. Wrappers (`sudo`, `env`, `bash`, `time`,
+…) and leading `NAME=value` assignments are stripped first, so
+`sudo docker build .` is still a `docker build`.
+
+- **Quoted text and heredocs are data.** `echo "make deploy"`, a commit
+  message, or `cat <<EOF` naming a script is not judged. Text a shell runs
+  is: the string after `bash -c`/`sh -c`/`zsh -c` and `eval`, and a heredoc
+  fed to a shell given no script (`bash <<EOF`).
+- **A syntax check runs nothing.** `bash -n`, `sh -n`, and `zsh -n` (also
+  bundled, as in `-nx`) are allowed.
+- **`cd` moves where the rest is judged.** `cd ../apps && ./ops.sh build` is
+  judged in `../apps`. After a `cd` the guard cannot follow (`cd $DIR`,
+  `cd -`, a directory that does not exist), only full paths are matched.
+- **A script's full or relative path is guarded from any directory; a bare
+  name only inside its own checkout** (or a worktree of it). Another repo's
+  own `scripts/ops.sh` is not yours. A word holding an expansion (`$OPS`) is
+  skipped, and globs are not expanded.
+- A command the guard cannot parse is allowed, with one line on stderr.
 
 The `make`/`task`/`just` rule and the allow list only apply to the projects
 that belong where the command runs — the checkout's own, worked out from the
-`repos:` block and the project paths. The script rule, the `kubectl` rule, and
-the `docker` rule apply from any directory.
+`repos:` block and the project paths. The `kubectl` and `docker` rules apply
+from any directory.
 
 ### Letting something through
 
@@ -235,8 +251,9 @@ walking past the queue by accident, and it never stops you working.
 ### Checking it without an editor
 
 `skram agent guard` is an ordinary command that reads a payload on stdin, so
-you can try it from a plain shell — not from inside a guarded agent session,
-where the guard would judge the line below as well:
+you can try it from a plain shell. The command under test sits inside a
+quoted payload, so the guard treats it as data even from inside a guarded
+agent session:
 
 ```bash
 echo '{"tool_input":{"command":"docker build -t app ."},"cwd":"'"$PWD"'"}' \

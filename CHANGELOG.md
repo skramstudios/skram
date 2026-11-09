@@ -5,6 +5,27 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-09
+
+- **Fixed:** the guard blocked commands that never touch the queue: another
+  repo's own `scripts/ops.sh` (every ops script matched by name, from any
+  directory), a syntax check (`bash -n`), and text that only mentions a
+  command (a heredoc, a quoted commit message). It now parses the command
+  as a shell would: `cd` moves where the rest is judged, a bare script name
+  is guarded only inside its own checkout, quoted text and heredocs are
+  data unless a shell runs them (`bash -c`, `eval`, `bash <<EOF`), and
+  `-n` runs nothing. See `docs/agent-setup.md`. The agent rules now tell an
+  agent to report a block it believes is wrong instead of working around it.
+
+- **Fixed:** Prometheus could not scrape a runner whose `ssh:` host is an
+  alias in your SSH config or a name only this machine resolves (a Tailscale
+  or `.local` name). `skram metrics up` now resolves each runner's host here
+  and writes its address into the scrape targets.
+- `skram metrics up --exporter-only` starts the exporter alone, for a runner
+  whose metrics another machine's Prometheus scrapes. On a machine with no
+  compose file, `skram metrics down` and `skram metrics status` now stop and
+  report the exporter and say there is no stack, instead of failing.
+
 ## [0.19.0] — 2026-09-30
 
 This release sends jobs to other machines. The queue stays on the machine

@@ -627,6 +627,7 @@ skram metrics up            # start the host exporter, write the scrape targets,
 skram metrics status        # the host exporter's health, then what the compose project has running
 skram metrics down          # stop the host exporter and the compose project
 skram metrics up --addr :9112   # the host exporter on another port
+skram metrics up --exporter-only  # the exporter alone, on a runner another machine's Prometheus scrapes
 ```
 
 The exporter is a Skram process on this machine, not a container. `metrics
@@ -684,13 +685,17 @@ archive.** `skram metrics up` runs `docker compose` against the first
 (`~/.local/share/skram/monitoring/docker-compose.yml`), then beside the
 binary, then in the directory you are standing in. An archive that carries
 only the binary, the licences, the completions, and the herdr plugin has none
-of those, so `up` starts nothing, and `status` and `down` stop at the compose
-step, with:
+of those, so `up` starts nothing and fails with:
 
 ```text
-Error: monitoring stack not found: docker-compose.yml not found — ensure
-monitoring/ directory exists in skram data dir (…) or current directory
+Error: docker-compose.yml not found — ensure monitoring/ directory exists
+in skram data dir (…) or current directory
 ```
+
+`status` and `down` still report and stop the exporter there, then say
+there is no monitoring stack on this machine. That is the normal state of a
+runner, where `skram metrics up --exporter-only` starts the exporter alone,
+with no compose file and no scrape targets.
 
 To use it, write that compose file yourself. Skram runs `docker compose` on
 it with two directories passed in: the logs directory as `SKRAM_LOGS_DIR`, so
@@ -700,13 +705,18 @@ directory as `SKRAM_METRICS_TARGETS_DIR`
 up` writes `skram.json` there, a Prometheus
 [file_sd](https://prometheus.io/docs/guides/file-sd/) list: this machine's
 exporter as `host.docker.internal:2112`, then each entry under `runners:` at
-port 2112 of its `ssh:` host (the `user@` and any port dropped), each with a
+port 2112 of its `ssh:` host's address (below), each with a
 `machine` label (this machine's host name, or the runner's name). Mount that
 directory into Prometheus and point a `file_sd_configs` job at it; on Linux
 the Prometheus service needs `extra_hosts: ["host.docker.internal:host-gateway"]`
-to reach the host. A runner is scraped only when its own exporter is running,
-so run `skram metrics up` there too, and its host name has to resolve from
-inside the container. If compose fails, `up` stops the exporter again, so
+to reach the host. A runner's address is resolved on this machine, since the
+container sees neither your SSH config nor this machine's resolver (a
+Tailscale or `.local` name, say): its `ssh:` host goes through `ssh -G`, so an
+alias in `~/.ssh/config` becomes the host it names, and that host is looked up
+here and written as its IPv4 address (else its first address, else the name
+itself). Run `metrics up` again if that address changes. A runner is scraped
+only when its own exporter is running, so run `skram metrics up
+--exporter-only` there too. If compose fails, `up` stops the exporter again, so
 the stack is up whole or not at all. Everything else about the stack is yours
 to decide. The URLs `metrics up` prints afterwards assume Grafana on 3333,
 Prometheus on 9090, and Loki on 3100, so those are the ports to publish if
