@@ -10,7 +10,9 @@ job works on this one.
 A runner needs `git`, the tools the target itself runs, an SSH login this
 machine can use without a prompt, and the same operating system and CPU
 architecture as this machine. It needs no Skram config and no Skram install:
-this machine copies its own binary there.
+this machine copies its own binary there. List the tools under the runner's
+[`tools:`](config.md#runners) and `skram doctor` and `skram runner check`
+check they are there.
 
 The job gets its `PATH` from your login shell on the runner (`$SHELL -l`),
 so what `~/.zprofile` or `~/.bash_profile` adds there, such as Docker
@@ -20,6 +22,43 @@ alone is missing: check with `ssh <runner> "$SHELL -lc 'command -v docker'"`,
 or pass `PATH` for one job with `--env PATH=…`, which wins. The rest of the
 environment is the SSH command's.
 
+## Setting up a machine as a runner
+
+Each requirement below has one command to run by hand from this machine, the
+one with the queue, and the fix when it fails. `<dest>` is the runner's SSH
+destination. For the login-shell `PATH`, where most first jobs fail, see the
+paragraph above.
+
+| Requirement | Check, run here | Fix |
+|---|---|---|
+| SSH logs in with no prompt of any kind | `ssh -o BatchMode=yes -o ConnectTimeout=10 <dest> true; echo $?` prints `0` | On the runner turn Remote Login on (macOS: System Settings, General, Sharing), put this machine's public key in its `~/.ssh/authorized_keys`, and log in once by hand to accept the host key. Skram never lets SSH prompt, so a password, passphrase, or host-key question fails the call. |
+| Same OS and CPU architecture | `uname -sm; ssh <dest> uname -sm` prints two identical lines | None: use another machine. An Intel runner cannot serve an Apple Silicon queue. |
+| Skram on the runner | none needed | Nothing to install or configure: the first job copies this machine's binary. |
+| It accepts jobs | `ssh <dest> 'grep accept_runner_jobs ~/.config/skram/config.yaml'` prints nothing or `true` | Remove `accept_runner_jobs: false` from the runner's own config ([Declining runner jobs](#declining-runner-jobs)). |
+| `git` and `git-receive-pack` on the plain SSH `PATH` | `ssh <dest> 'command -v git git-receive-pack'` prints two paths | Install git (on macOS, the Command Line Tools: `xcode-select --install`, at the machine). The push and the checkout that precede every job run under the bare SSH `PATH`, not the login shell's. |
+| The login-shell `PATH` is what the jobs need | `ssh <dest> '$SHELL -lc "echo \$PATH"'` | Set it in `~/.zprofile` or `~/.bash_profile`, not `~/.zshrc`, or pass `--env PATH=…` on each job. |
+| Each tool the target runs is on that `PATH` | `ssh <dest> '$SHELL -lc "command -v node pnpm"'` (name your tools) prints a path for each | The same fix. Name the tools under [`tools:`](config.md#runners) so `doctor` and `runner check` look for them every time. |
+| On a Mac, the runner stays awake | `ssh <dest> 'pmset -g \| grep sleep'` shows `sleep 0` | On the runner, `sudo pmset -a sleep 0 disablesleep 1`, or keep it on power with `caffeinate -s`. |
+
+A job that uses Docker Desktop on a Mac needs a logged-in desktop session on
+the runner, since Docker Desktop runs only inside one: log in once after each
+reboot. This machine must stay awake too: while it sleeps, nothing new is
+dispatched and a streaming connection drops.
+
+`skram runner check` runs all of it, from here, in one command, and prints
+the fix under each row that fails (see [Checking a runner](#checking-a-runner)):
+
+```bash
+skram runner check studio
+```
+
+`skram runner add` declares the runner (see [Declaring a runner](#declaring-a-runner))
+and ends by running that check:
+
+```bash
+skram runner add studio --ssh me@studio.example.net --tools node,pnpm
+```
+
 ## Declaring a runner
 
 ```yaml
@@ -27,13 +66,58 @@ runners:
   build-box: {}                  # reached as `ssh build-box`
   studio:
     ssh: me@studio.example.net   # any destination your SSH program accepts
+    tools: [node, pnpm, docker]  # commands its jobs need on its login-shell PATH
 ```
 
 A runner's name is its SSH destination unless `ssh:` says otherwise, and
 `ssh:` is one destination (a host, an alias, or `user@host`), never a
 command. A name starts with a lowercase letter or digit and continues with
 lowercase letters, digits, `.`, `_`, and `-`. `local` is this machine and
-cannot be declared.
+cannot be declared. `tools:` is optional; what it does is in
+[the config reference](config.md#runners).
+
+`skram runner add` writes the entry for you:
+
+```bash
+skram runner add studio --ssh me@studio.example.net --tools node,pnpm
+skram runner add build-box --yes                                # no ssh: (the name is the destination), no question
+skram runner add studio --ssh me@studio.example.net --dry-run   # print the lines, write nothing
+```
+
+It prints the lines it would add under `runners:` (with the `runners:` key
+when the config has none yet), then asks `Add to <config>? [Y/n]` in a
+terminal. Anywhere else it writes only with `--yes`; `--dry-run` writes
+nothing even with `--yes`, and so does `--json`, which prints `name`,
+`destination`, `tools`, `config`, `lines` (the exact text), and `written`
+(always false). The rest of the file, comments
+and key order included, is left as it was. It refuses a name already
+declared, `local`, a name outside the rule above, an `--ssh` with spaces in
+it, and a `--tools` entry that is not a command name, and writes nothing.
+After a write it runs `skram runner check` on the new runner (see
+[Checking a runner](#checking-a-runner)) and exits with its code, so a
+runner that cannot be reached yet is still declared and the command exits 1.
+
+```bash
+skram runner list          # one line per runner: SSH destination, tools, projects that default to it
+skram runner list --json   # the same, keyed by runner name
+```
+
+`skram runner list` reads the config only and contacts no runner:
+
+```text
+RUNNER     SSH                    TOOLS               DEFAULT FOR
+build-box  build-box              -                   -
+studio     me@studio.example.net  node, pnpm, docker  api
+```
+
+With `--json` it prints one object keyed by runner name, each with
+`destination`, `tools`, and `projects` (the projects whose `runner:` is that
+runner); `tools` and `projects` are always lists, empty when there are none,
+and the object is `{}` when no runner is declared. With none declared, the
+plain output says so and names `skram runner add <name> --ssh <dest>`, and
+`skram doctor` prints `[--] runners: none declared` as information.
+`skram discover --json` carries the same names under `runners`, each with
+`destination` and `tools`.
 
 ## Sending a job
 
@@ -98,6 +182,46 @@ label, a project with no `resource:` sent to `studio`, is not printed.
 `skram wait --resource cluster@studio` and `skram kill --resource
 cluster@studio` address that lane alone; `--resource cluster` is this
 machine's.
+
+## Splitting a suite across runners
+
+To shorten a suite, send one job per destination: one here and one to each
+runner. Each runs in its own lane, so they run at the same time.
+
+```bash
+skram run api test --suite a --json                       # this machine, lane cluster
+skram run --runner studio api test --suite b --json       # lane cluster@studio
+skram run --runner build-box api test --suite c --json    # lane cluster@build-box
+skram wait <item-a> --json --timeout auto                 # one wait per item
+skram wait --queue                                        # or wait for every lane
+```
+
+- Arguments after the target pass through as they are, so the split (a suite
+  name, a shard, a filter) is whatever the target already accepts.
+- `--runner` goes before or after the target. A project's `runner:` default
+  avoids the flag, and `--runner local` overrides it for one job.
+- Each runner needs its own copy of whatever the suite talks to (a database,
+  containers, a cluster, ports). Bring it up with a job sent to that runner,
+  never by hand.
+- Two jobs sent to one runner on one `resource:` take turns, and a job's
+  estimate is the same wherever it ran.
+
+## What is not true about runners
+
+Each of these is a wrong assumption that sends a reader looking for something
+that is not there.
+
+| If you assume | What is true |
+|---|---|
+| A runner has a Skram command to run, or something keeps running there | The `skram runner` commands run here. Nothing runs on a runner between jobs. See [Declaring a runner](#declaring-a-runner). |
+| The runner needs Skram installed and configured | It needs neither: this machine sends its binary and a config for each job, and a `skram` already on the runner is never used for a sent job. See [What goes to the runner](#what-goes-to-the-runner). |
+| Declaring runners makes the queue spread jobs | Nothing picks a runner. A job goes where `--runner` or its project's `runner:` says, else it runs here. To use three machines, enqueue three jobs: see [Splitting a suite across runners](#splitting-a-suite-across-runners). |
+| You run `skram`, or the tests, on the runner | Enqueue, `wait`, and read logs here only. Nothing needs a login on the runner after setup. |
+| The runner uses its own checkout of the project | Its own checkouts are never read. The job runs in a worktree Skram keeps, on the exact commit sent. See [Where things live on a runner](#where-things-live-on-a-runner). |
+| Installs, `.env` files, and build output come along | Files git ignores never leave this machine. The job installs what it needs; pass values with `--env`. |
+| An ephemeral target can go to a runner | It always runs here, and `--runner` on one is refused. See [Sending a job](#sending-a-job). |
+| A workflow's steps can go to runners | A workflow's steps run here. |
+| Any machine can be a runner | It must have this machine's OS and CPU architecture, or the job fails as `runner_refused`. |
 
 ## What goes to the runner
 
@@ -164,7 +288,9 @@ all of it:
 | `runs/<job>` | the config sent for one job and the detached process's output |
 
 The leases are beside it, in `$XDG_DATA_HOME/skram/leases`: one file per
-resource, shared by the runner's own queue and the jobs sent to it.
+resource, shared by the runner's own queue and the jobs sent to it. On the
+machine that sends the jobs, `$XDG_DATA_HOME/skram/runners/<name>.json` is
+what it last heard from each runner (see [Checking a runner](#checking-a-runner)).
 
 Two checkouts of one repo whose folders share a name would share a worktree, so
 a job that reads both is refused; rename one.
@@ -337,15 +463,68 @@ A runner that cannot be reached at all is not a failure: see
 one line per runner:
 
 ```text
-[ok] runner build-box: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner
-[--] runner studio (me@studio.example.net): reachable, darwin/arm64, no skram yet (the first job sends this machine's v0.19.0 (engine 0.19.0)); data ~/.local/share/skram/runner
-[!!] runner old-box: unreachable through ssh: runner call hello exited 255: ssh: connect to host old-box port 22: Connection refused
-[--] runner lab-mac: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0), declines runner jobs (accept_runner_jobs: false there); data ~/.local/share/skram/runner
+[ok] runner build-box: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner; last contact 3m ago
+[--] runner studio (me@studio.example.net): reachable, darwin/arm64, no skram yet (the first job sends this machine's v0.19.0 (engine 0.19.0)); data ~/.local/share/skram/runner; last contact never
+[!!] runner old-box: unreachable through ssh: runner call hello exited 255: ssh: connect to host old-box port 22: Connection refused; last contact 2h5m ago (unreachable)
+[--] runner lab-mac: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0), declines runner jobs (accept_runner_jobs: false there); data ~/.local/share/skram/runner; last contact 1d3h ago (declined)
+[!!] runner mini: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner; login PATH /usr/bin:/bin:/usr/sbin:/sbin; missing on login PATH: node, pnpm; last contact just now
 ```
 
-A runner that is unreachable, or of another OS or architecture, is an issue
-and makes `doctor` exit 1. One with no Skram or another build is information
-only: the next job sends this machine's.
+A reachable runner's line gives the `PATH` a job there gets from the login
+shell. Every line ends with the last contact before this one: how long ago
+this machine last said hello to the runner (`never` when it has not), with
+the outcome when that hello did not get an ordinary answer. A
+runner that is unreachable, or of another OS or architecture, is an issue
+and makes `doctor` exit 1, and so is one missing a tool its `tools:` names
+from that `PATH`, or missing `git` or `git-receive-pack` from the plain SSH
+`PATH` every job's push runs under. One with no Skram or another build is
+information only: the next job sends this machine's. A runner still on an
+older Skram build reports no `PATH` until the next job replaces it.
+`skram runner check` is the row-by-row form of that line, with the fix
+under each failed row.
+
+The queue keeps each runner's last answer in
+`$XDG_DATA_HOME/skram/runners/<name>.json` on this machine, written after
+every hello it makes: before a dispatch, while an item waits for the runner,
+and in `runner check` and `doctor`. `skram status --json` carries those files
+as `runners`, each with `last_contact_seconds`, without contacting anyone
+(the fields are under [`status`](mcp.md#status)).
+
+```bash
+skram runner check                            # every declared runner, in name order
+skram runner check studio --tools node,pnpm   # look for these tools instead of its tools:
+skram runner check studio --json              # the same rows as data
+```
+
+It asks each runner once (a second call asks a macOS runner's `pmset` about
+sleep) and prints one row per item: SSH, OS and architecture, the Skram build
+there, whether it accepts jobs, `git` on the plain SSH `PATH`, the login-shell
+`PATH`, each tool, and sleep. `check` sends nothing and pushes nothing, so it
+is safe to run at any time.
+
+```text
+runner studio (me@studio.example.net)
+[ok] SSH connects without a prompt
+[ok] darwin/arm64, same as this machine
+[--] no skram yet (the first job sends this machine's v0.21.0 (engine 0.21.0))
+[ok] accepts jobs
+[ok] git and git-receive-pack on the SSH PATH
+[ok] login PATH /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+[ok] node on the login PATH
+[!!] pnpm missing from the login PATH
+     fix: add its directory to PATH in the runner's login profile (~/.zprofile or ~/.bash_profile; ~/.zshrc is not read), or pass --env PATH=… on each job
+[--] sleep allowed (pmset sleep 10): an idle runner goes to sleep and jobs wait for it
+     fix: on the runner: sudo pmset -a sleep 0 disablesleep 1, or keep it on power with caffeinate -s
+```
+
+`[!!]` is a problem a job would hit, and makes `check` exit 1; `[--]` is
+information. When SSH fails, that row and its fix are all a runner gets,
+since nothing else can be asked. With no name it checks every declared
+runner. `--tools a,b` replaces the runner's `tools:` for this one call.
+`--json` prints an object keyed by runner name, each a list of rows in the
+order above: `name` (`ssh`, `platform`, `build`, `accepts`, `git`,
+`login_path`, `tool:<name>`, `sleep`), `ok` (false only for `[!!]`), `warn`
+(true for `[--]`), `detail`, and `fix` (absent when there is none).
 
 ## Declining runner jobs
 

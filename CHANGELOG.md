@@ -5,6 +5,45 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-18
+
+- **New:** `skram runner`, three commands for the machines you send jobs to.
+  `skram runner list` shows each declared runner with its SSH destination,
+  its tools, and the projects that default to it. `skram runner check
+  [name...] [--tools a,b]` checks a machine from here, one row each: SSH
+  without a prompt, the same OS and architecture, the Skram build there,
+  that it accepts jobs, `git` on the plain SSH `PATH`, the login-shell
+  `PATH`, each tool your jobs need on it, and, on a Mac, that it does not
+  sleep. The fix follows every failed row, it exits 1 on a failure, and it
+  sends and pushes nothing. `skram runner add <name> [--ssh <dest>]
+  [--tools a,b]` writes the entry into your config the way `skram init
+  --detect` writes a project (it asks in a terminal, writes elsewhere only
+  with `--yes`, and `--dry-run` or `--json` write nothing), then runs the
+  check. All three take `--json`.
+- A runner may list the commands its jobs need under `tools:`. `skram
+  doctor` and `skram runner check` report any that are missing from the
+  runner's login-shell `PATH`, and say what that `PATH` is. A job sent to a
+  runner that lacks one still runs, with a warning in its log.
+- `skram doctor` ends each runner line with when that runner last answered,
+  and says so when no runner is declared. `skram status --json` and `skram
+  discover --json` carry a `runners` object: the first the last answer of
+  each runner, read from a file with no SSH call, the second each runner's
+  destination and tools.
+- `skram explain` on a runner job that failed with `command not found` says
+  the job's `PATH` came from the runner's login shell and shows the `--env
+  PATH=...` re-run that overrides it.
+- The agent rules have a Runners section: what a runner is, how to list
+  them, that nothing spreads jobs by itself, and that an agent never logs in
+  to a runner or installs anything there. `skram agent install-rules`
+  carries it into each checkout.
+- The generated config shows a commented `runners:` example with `tools:`.
+- `docs/runners.md` has a checklist for setting up a machine as a runner
+  with a command to check each requirement by hand, what is not true about
+  runners, and an example that splits a suite across the local queue and
+  two runners. `docs/troubleshooting.md` has rows for a Docker login that
+  fails over SSH (`-25308`), a sleeping runner, and git submodules, which
+  are not initialised in a runner's worktree.
+
 ## [0.20.0] — 2026-11-09
 
 - **Fixed:** the guard blocked commands that never touch the queue: another

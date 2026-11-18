@@ -192,6 +192,7 @@ One session per checkout, an agent in each, all deploying to one cluster:
 | | | |
 | --- | --- | --- |
 | `skram run --runner <name>` | run a job on another machine over SSH: it waits in its own lane here, your uncommitted work goes with it, its output streams back, and a resource on that machine is still used by one job at a time | [runners](docs/runners.md) |
+| `skram runner list` / `check` / `add` | see the runners you have declared, check a machine is ready to be one (SSH, architecture, `git`, the tools a job needs, sleep) with the fix under each failure, and declare one in your config | [setting up a runner](docs/runners.md#setting-up-a-machine-as-a-runner) |
 | `skram agent guard` | a Claude Code and Cursor shell hook: it blocks the ops script, a known `make`/`task`/`just` target, and `kubectl` and `docker` mutations, and prints the `skram run` line instead | [installing it](docs/agent-setup.md) |
 | `skram tui` | running jobs and their logs, a launcher, and the queue, in the terminal | [as a popup](docs/herdr.md) |
 | `skram workflow list`, `skram workflow run` | a DAG of targets, defined under `workflows:`, queued as one job that holds every lane its steps need | [the keys](docs/config.md) |

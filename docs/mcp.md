@@ -107,9 +107,17 @@ Output:
         { "name": "test", "help": "run the test suite", "ephemeral": false }
       ]
     }
+  },
+  "runners": {
+    "studio": { "destination": "me@studio.example.net", "tools": ["node", "pnpm"] }
   }
 }
 ```
+
+`runners` sits beside `projects`: every runner the config declares, keyed by
+name, with its SSH `destination` and its `tools` (see
+[Runners](runners.md#declaring-a-runner)), and `{}` when there is none. A
+project's own `runner` is the one its jobs go to when a run names none.
 
 `backend` is `script`, `make`, `task`, or `just`, and `file` is the file the
 targets were read from. `resources` are the shared resources this project's
@@ -204,6 +212,20 @@ Output, with one job running and one item waiting behind it:
         "eta_seconds": 9
       }
     ]
+  },
+  "runners": {
+    "studio": {
+      "at": "2026-09-21T20:01:12.40312-04:00",
+      "outcome": "ok",
+      "version": "v0.21.0 (engine 0.21.0)",
+      "os": "darwin",
+      "arch": "arm64",
+      "probed": true,
+      "login_path": "/opt/homebrew/bin:/usr/bin:/bin",
+      "missing_tools": ["pnpm"],
+      "last_contact_seconds": 154
+    },
+    "old-box": { "outcome": "never" }
   }
 }
 ```
@@ -216,6 +238,19 @@ runner), and the queue's `eta_seconds` is the longest lane's. A running job
 sent to a runner carries `runner`; `leases` lists the leases held on this
 machine, and `waiting_for_runner` and `waiting_for_lease` the items waiting
 on a runner.
+
+`runners` has one entry per declared [runner](runners.md), `{}` when there
+is none. It is what this machine last heard from each, read from a file the
+queue writes after every hello it makes (before a dispatch, while an item
+waits, and in `runner check` and `doctor`), so `status` never contacts a
+runner. `at` is that hello's time and `last_contact_seconds` its age.
+`outcome` is `ok` (it answered), `unreachable` (it gave no answer, or none
+skram could read; `error` says what happened), `declined` (its owner set
+`accept_runner_jobs: false`), or `never` (no hello yet: the entry has nothing
+else). An answer also carries the runner's `os`, `arch`, and Skram `version`
+(absent when it has none yet); `probed` is true when it was asked about its
+tools, and then `login_path`, `missing_tools`, and `missing_git` are what it
+said, as in [Checking a runner](runners.md#checking-a-runner).
 
 While the queue is on hold, `queue` carries a `hold` as well:
 

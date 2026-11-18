@@ -329,6 +329,54 @@ Exit codes a caller can branch on: the job's own code, or `124` for a
 `137` for a job that was killed. `skram wait` and `skram run -f` use the same
 three; [how it works](how-it-works.md) has the table and its one caveat.
 
+## Runner jobs
+
+A job sent to a runner ([runners](runners.md)) fails or waits for reasons a
+local job does not have. `skram runner check <name>` finds most of them; the
+rest are below.
+
+### `error saving credentials` (-25308) or `User interaction is not allowed`
+
+`docker login` or `helm registry login` in a runner job fails with
+`error saving credentials … (-25308)`. A process started over SSH cannot
+reach the macOS keychain, which Docker's default credential store uses. On
+the runner, copy `~/.docker/config.json` without its `credsStore` key, and
+the `~/.docker/contexts/` directory, into a second directory:
+
+```bash
+mkdir -p ~/.docker-jobs
+cp -R ~/.docker/contexts ~/.docker-jobs/
+grep -v credsStore ~/.docker/config.json > ~/.docker-jobs/config.json
+```
+
+Then pass that directory on each job, with `HELM_REGISTRY_CONFIG` as well
+when the job uses helm (use the absolute path of the directory):
+
+```bash
+skram run --runner studio api push --env DOCKER_CONFIG=/home/ci/.docker-jobs --env HELM_REGISTRY_CONFIG=/home/ci/.docker-jobs/config.json
+```
+
+### Items sit in `waiting_for_runner`
+
+A runner that is asleep, off, or not answering SSH is waited for, not failed:
+the item stays pending and is tried again about once a minute. `skram runner
+check <name>` says which: when SSH works but the sleep row is `[--]`, the
+runner allows sleep, and its fix is on the line under it
+(`sudo pmset -a sleep 0 disablesleep 1` on the runner, or `caffeinate -s` on
+power). Waking the runner is enough for the item to start; do not enqueue it
+again. See [When the runner is off](runners.md#when-the-runner-is-off).
+
+### A build that reads a git submodule fails on a runner
+
+Git submodules are not initialised in the runner's worktree: a known gap.
+Once per worktree, initialise them there (the path pattern is in
+[Where things live on a runner](runners.md#where-things-live-on-a-runner),
+under the runner's data directory, `~/.local/share/skram` by default):
+
+```bash
+ssh me@studio.example.net 'git -C ~/.local/share/skram/runner/worktrees/<repo>/<checkout> submodule update --init --recursive'
+```
+
 ## Reading `skram doctor`
 
 `skram doctor` is the first thing to run on a machine that is behaving

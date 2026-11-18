@@ -595,12 +595,19 @@ runners:
   build-box: {}
   studio:
     ssh: me@studio.example.net
+    tools: [node, pnpm, docker]
 ```
 
 The machines `skram run --runner <name>` may send a job to, by name. `ssh:` is
 the destination handed to the SSH program; it defaults to the name. `local`
 is reserved for this machine. What a runner receives and keeps is in
 [Runners](runners.md).
+
+`tools:` names the commands that runner's jobs need on its login-shell
+`PATH`, as bare command names (`node`, not a path). Skram asks the runner
+for them when it checks it (`skram doctor`, and before each job it sends),
+and reports each one missing; a job is still sent when one is missing, with
+a warning in its events, so a stale list never fails a job. Empty by default.
 
 ## `accept_runner_jobs:`
 

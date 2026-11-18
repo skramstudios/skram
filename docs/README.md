@@ -35,15 +35,19 @@ skram discover                  # every project, target, and typical duration
 - [MCP](mcp.md) — the tools `skram mcp` serves, the JSON each one takes and
   returns, and the resources it exposes.
 - [Runners](runners.md) — sending a job to another machine over SSH with
-  `--runner`: declaring one, what travels and what stays, where the runner
-  keeps things, and the SSH program every call goes through.
+  `--runner`: [setting up a machine as a runner](runners.md#setting-up-a-machine-as-a-runner)
+  and checking it with `skram runner check`, declaring one with `skram runner
+  add`, [what is not true about runners](runners.md#what-is-not-true-about-runners),
+  what travels and what stays, where the runner keeps things,
+  [splitting a suite across runners](runners.md#splitting-a-suite-across-runners),
+  and the SSH program every call goes through.
 - [herdr](herdr.md) — the sidebar row the processor keeps, the plugin actions, and
   the key bindings for them.
 - [Notifications](notifications.md) — the one-time macOS setup that makes job-end
   notifications appear, and how to turn them off.
 - [Troubleshooting](troubleshooting.md) — an item that never starts (is the queue held, and who
   held it), a processor that died and where its log is, a quarantined binary,
-  silent notifications, how to read what `skram doctor` prints, and every
+  silent notifications, [runner jobs](troubleshooting.md#runner-jobs) (keychain errors over SSH, a sleeping runner, submodules), how to read what `skram doctor` prints, and every
   `SKRAM_*` variable in one table.
 - [Questions](faq.md) — why this rather than a single-terminal job queue or a lock
   file, whether it works alongside worktrees, whether the source is available,
