@@ -313,6 +313,19 @@ configured is an error result naming the ones that are, and an ephemeral
 target with a named runner is refused. `wait`, `logs`, and `explain` then work
 as for any job. See [Runners](runners.md).
 
+On a target in the project's [`ledger:`](config.md#ledger) whose trees,
+target, and args already have a green job, nothing is queued and the result
+is the skip report the CLI's `run --json` prints: `skipped: true`, the green
+`job_id`, `green_at`, `age_seconds`, and the `wait`, `explain`, and `force`
+commands. `force: true` runs it anyway, as `--force` does (see [skipping a
+proof that already passed](how-it-works.md#skipping-a-proof-that-already-passed-ledger)).
+`need_greens: N` skips only once the key has N consecutive greens since its
+last red, as `--need-greens` does; each call queues at most one job. Pending
+and running jobs of the key count toward N: once the greens plus those reach
+it, nothing is queued and the result is `in_flight: true` with
+`in_flight_items` and a `wait` command for the oldest (see
+[consecutive greens and flakes](how-it-works.md#consecutive-greens-and-flakes---need-greens)).
+
 For a project with [inputs](config.md#inputs) — other repos its targets
 read — pass `checkouts` instead: a list of directories, one per repo,
 resolved the same way (absolute, or relative to the server's own cwd) and

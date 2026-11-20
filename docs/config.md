@@ -138,6 +138,35 @@ target through when it sees it on a command line.
 Keep the list to targets that only read. A target listed here bypasses the
 lane, so a write in it can land beside a running job.
 
+### `ledger:`
+
+The project's proof targets: test runs whose green result Skram remembers, so
+the same proof is not run twice.
+
+```yaml
+projects:
+  my-app:
+    path: ~/dev/my-app
+    script: ops.sh
+    ledger: [test, e2e]
+```
+
+Default: empty — every target runs every time, and nothing is recorded. A
+job of a listed target that exits 0 is recorded green under its key: the git
+tree of its checkout and of each [input](#inputs), read when the job starts,
+plus the target and its arguments. A later `skram run` of the same key is
+not queued: it exits 0 and names the green job and its age. `--force` runs it
+anyway, and `--need-greens=N` asks for N consecutive greens. A job whose
+checkout or input had uncommitted changes or untracked files when it started
+is never recorded. A job may report the trees it actually tested in
+`SKRAM_TESTED_TREES`. See [skipping a proof that already
+passed](how-it-works.md#skipping-a-proof-that-already-passed-ledger).
+
+List only targets that prove something and change nothing. A deploy, a
+build, or a cluster bring-up must run every time it is asked for, so it never
+belongs here. An ephemeral target on the list is ignored: it has no job to
+record.
+
 ### `expose:`
 
 The targets this project offers.
@@ -313,6 +342,39 @@ when a run names none: a key of the top-level [`runners:`](#runners) block.
 Empty (the default) runs jobs on this machine, and `--runner local` runs one
 here whatever the project says. A name that is not in `runners:` is a config
 error. An ephemeral target always runs here.
+
+### `e2e:`
+
+```yaml
+projects:
+  my-app:
+    path: ~/dev/my-app
+    script: ops.sh
+    e2e:
+      scopes: [smoke, checkout]
+      iterate: skram run my-app test -- --scope=<s> "--grep=<title>"
+      fast: --fast
+      deploy: skram run my-app rebuild-and-deploy <svc>
+      gate: skram run my-app cluster-run -- --scope=<s>
+      dev: pnpm dev against the running cluster
+      runners: --runner build-box when this machine is busy
+```
+
+The end-to-end recipe for this project, written once on this machine so an
+agent does not have to guess it. Every key is optional and free text;
+`scopes:` is a list, the rest are one line each: `iterate` (a warm run of one
+test on the running cluster), `fast` (the flag that shortens timeouts and stops
+at the first failure), `deploy` (rebuild and redeploy one service), `gate`
+(the cold, full run), `dev` (a dev server against the cluster), and `runners`
+(when to use another machine). Skram checks the shape only and never runs
+these. `skram agent install-rules` renders the stanza as an `### E2E recipe`
+table inside the project's section of `AGENTS.local.md`, after its targets
+table. When a project has a target named `test`, `tests`, `e2e`, or with one of
+those as a `-`, `_` or `:` separated word (`cluster-test`), or `cluster-run`,
+and no `e2e:` stanza, `install-rules` prints a `SKIP` line saying so. The
+line is advisory: it goes by target names alone, so a plain unit `test`
+target draws it too. Ignore it for a project with no end-to-end suite;
+nothing else changes.
 
 ### `guard:`
 

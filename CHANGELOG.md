@@ -5,6 +5,46 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-11-19
+
+- **New:** an `e2e:` block on a project in your config (`scopes`, `iterate`,
+  `fast`, `deploy`, `gate`, `dev`, `runners`) holds that project's end-to-end
+  commands. `skram agent install-rules` writes it into `AGENTS.local.md` as an
+  `### E2E recipe` table, and says so when a project has a `test` or
+  `cluster-run` target but no `e2e:` block.
+- **New:** `ledger:` in a project lists its proof targets. A job of one that
+  exits 0 on committed trees is recorded green: the git tree of its checkout
+  and of each input, its target, and its arguments. Asking for the same run
+  again does not queue it: `skram run` exits 0 and names the green job and
+  how long ago it passed (`skipped: true` in `--json` and from the MCP `run`
+  tool), and `skram explain` on that job says why and how long ago the key's
+  newest green passed. The arguments are kept in the order given, so
+  `--grep A --project B` and `--project A --grep B` are different keys; only
+  skram's own flags are left out. `skram wait <job>` and `skram run -f`
+  return only once the job's outcome is recorded. `--force` (MCP `force`)
+  runs it anyway. A job sent to a runner is recorded on the machine that
+  holds the queue. A project without the list, and every target not on it,
+  runs every time, as before.
+- **New:** `skram run --need-greens=N` (MCP `need_greens`) on a `ledger:`
+  target runs until the same trees, target, and args have N consecutive
+  greens, then skips: each `run` queues at most one job, and asking again
+  once the count is met adds nothing. Jobs of the same key still pending or
+  running count too: once the greens plus those reach the count, nothing is
+  queued and `run` exits 0 with `in_flight: true` and `in_flight_items`, each
+  with a `wait` command (`run -f` follows the oldest instead), so a gate line
+  sent again never adds a job. A failing job is recorded red and resets the
+  count, so a plain run after a red runs again. A red right after a green is
+  recorded as a flake (a red after a red is not): the skip report counts
+  them (`flakes`) and `skram explain` lists them. Every argument, `--fast`
+  included, stays part of the key.
+- **New:** a ledgered job can report the trees it actually tested, such as
+  the images on a cluster, by writing `<label> <tree-hash>[ dirty]` lines to
+  the file named in `SKRAM_TESTED_TREES`. The lines replace the checkout's
+  and inputs' trees in the key. A report that names only trees the job
+  started on also lets the next identical run skip; one that names older
+  trees never skips a run of the checkout. A `dirty` or malformed line
+  records nothing.
+
 ## [0.21.0] — 2026-11-18
 
 - **New:** `skram runner`, three commands for the machines you send jobs to.

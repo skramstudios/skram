@@ -184,6 +184,11 @@ One session per checkout, an agent in each, all deploying to one cluster:
   ([per-job variables](docs/how-it-works.md#per-job-variables---env)).
 - Only a target you listed as `ephemeral:` skips the queue, which is your
   promise that it is read-only.
+- A target you list under `ledger:` is a proof: once a job of it passes on
+  committed trees, the same run (same trees, target, and args) is skipped and
+  names the green job; `--force` runs it anyway, `--need-greens=N` asks for N
+  in a row, and a red right after a green is recorded as a flake
+  ([skipping a proof that already passed](docs/how-it-works.md#skipping-a-proof-that-already-passed-ledger)).
 - `--on-error stop` cancels the pending items in the failed job's lanes — every
   project sharing the resource, and no other lane.
 

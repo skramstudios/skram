@@ -20,6 +20,7 @@ exits with.
 - [Lanes, and the rule for an item with two resources](#lanes-and-the-rule-for-an-item-with-two-resources)
 - [Hold, drain, kill, cancel](#hold-drain-kill-cancel)
 - [Ephemeral targets and `--now`](#ephemeral-targets-and---now)
+- [Skipping a proof that already passed: `ledger:`](#skipping-a-proof-that-already-passed-ledger)
 - [When a job fails: `--on-error`](#when-a-job-fails---on-error)
 - [Estimates](#estimates)
 - [Attaching, waiting, and exit codes](#attaching-waiting-and-exit-codes)
@@ -461,6 +462,132 @@ or add it to ephemeral: in the project config
 So `--now` is only ever a statement of intent: it says "I expect this to be
 free", and Skram tells you when you are wrong instead of running a build
 beside someone else's.
+
+## Skipping a proof that already passed: `ledger:`
+
+A project lists its proof targets under [`ledger:`](config.md#ledger). For
+those targets alone, Skram remembers each green job and skips a request to
+prove the same thing again:
+
+```bash
+skram run my-app test --scope=auth --json   # queued; exits 0: recorded green
+skram run my-app test --scope=auth --json   # not queued: {"skipped": true, "job_id": "J…", "age": "12m", …}
+skram run my-app test --scope=auth --force  # queued anyway
+```
+
+The key is what the job tested and how: the git tree (`HEAD^{tree}`) of the
+job's checkout and of each of the project's [inputs](config.md#inputs), read
+when the job starts, then the project, the target, and its arguments. The
+arguments keep the order you gave them; only Skram's own flags are left out
+(`-f`, `-C` with its directory, `--env` and `--runner` with their values,
+`--force`, `--need-greens`). So the same commit in another worktree, on a
+runner, or with its own `--env`, is the same key; a new commit in the
+checkout or in an input, or different arguments, is a new one. Unlike an
+[estimate](#estimates) key, flags are not sorted: `--grep A --project B` and
+`--project A --grep B` test different things. The same arguments in another
+order are another key too, which costs at most one extra run, never a wrong
+skip.
+
+A job is recorded green when it exits 0 and every tree was clean when it
+started: no uncommitted change and no untracked file that is not ignored. A
+job whose script fails on clean trees is recorded red; a killed or cancelled
+job, or one whose runner was lost, is neither. A run whose trees are not
+clean says so on stderr when it is queued, and is never skipped. A job sent
+to a [runner](runners.md) is recorded here, on the machine that holds the
+queue, like a local one, so a green on either machine skips the other's
+request.
+
+A skipped run takes no queue slot and no lease, and a hold does not stop it,
+because nothing reaches the queue. Its `--json` report (the same from the
+MCP `run` tool) names the green job (`job_id`), when it passed (`green_at`,
+`age_seconds`), the trees, and three commands: `wait`, which exits 0 at once
+with that job's code; `explain`, whose `ledger` section shows the trees, the
+key's newest green and its age (`green_at`, `age`), and why a run of that key
+is skipped; and `force`, the same run with `--force`.
+
+`--force` goes anywhere before a bare `--`, before the project or after the
+target. On a target not on the ledger a `--force` after the target is the
+target's own argument, as it always was. Greens never expire: use `--force`
+when something the key cannot see has changed, such as a base image, a tool
+version, or the environment.
+
+A job's outcome is in the ledger before its `status.json` says it finished,
+so `skram wait <job>` and `run -f` return only once a run of the same key
+would see it.
+
+A green outlives its job directory. [`skram prune`](#a-job-on-disk)
+removes old job directories (by default those older than 720 hours), and the
+ledger keeps the green: the same run is still skipped and names that job, but
+`skram wait` and `skram explain` on its id then fail, because the job's files
+are gone. `--force` re-proves the key and gives it a job you can read.
+
+### Consecutive greens and flakes: `--need-greens`
+
+A run is skipped when its key's greens since its last red reach a count: 1
+by default, N with `--need-greens=N` (MCP `need_greens`). A red resets the
+count, so a plain run after a red runs again even though the key passed
+before it. Each `run` queues at most one job; for a gate of two greens, run
+the same line again after each job until it is skipped:
+
+```bash
+skram run --need-greens=2 my-app test --json   # 0 of 2: queued
+skram run --need-greens=2 my-app test --json   # 1 of 2: queued
+skram run --need-greens=2 my-app test --json   # skipped: "greens": 2, "green_jobs": ["J…", "J…"]
+```
+
+Jobs of the key that are still pending or running count toward the gate. A
+run is queued only while the key's greens plus its in-flight jobs are short
+of N; otherwise nothing is queued and `run` exits 0 with `in_flight: true`,
+`in_flight_items` (each with its `item_id`, its `job_id` once it runs, its
+`status`, and a `wait` command), and `wait` for the oldest. With
+`--need-greens=2` and no greens, two sends at once both queue (say one with
+`--runner` and one local, since the runner is not part of the key) and a
+third is in flight. With no `--need-greens`, one job in flight is enough.
+`run -f` on an in-flight key follows the oldest of those jobs instead of
+queueing another, and exits with its code. `--force` queues one more anyway.
+
+Asking again once the count is met, or while it is in flight, never adds a
+job, so a gate can be re-sent safely, after a lost session for example.
+`--need-greens` goes where `--force` does; on a target off the ledger it is
+refused (after the target it is the target's own
+argument). Every other argument stays in the key, so a green of
+`test --fast` never counts toward a gate on `test`.
+
+A red right after a green on the same key is a **flake**: it broke a streak,
+so the same trees, target, and args both passed and failed. A red after a
+red is not another flake: a failure that repeats is a regression, and only
+the red that ended the streak counts. A run queued while the key's streak is
+broken says so on stderr, a skip report counts the key's flakes (`flakes`),
+and `skram explain` on any job of the key lists them (`ledger.flakes`: job id
+and when; `ledger.flake` on the red itself).
+
+### Reporting what a job tested: `SKRAM_TESTED_TREES`
+
+The checkout's trees are not always what a job tested: a test against a
+running cluster tests the images deployed there, which may have been built
+from an older commit. A ledgered job finds a file path in
+`SKRAM_TESTED_TREES` and may write one line per tree it tested:
+
+```bash
+echo "spec $(git rev-parse 'HEAD^{tree}')" >> "$SKRAM_TESTED_TREES"
+echo "api 3f9c…e1 dirty" >> "$SKRAM_TESTED_TREES"   # an image built with uncommitted changes
+```
+
+Each line is `<label> <tree-hash>`, with ` dirty` after the hash for a tree
+that had uncommitted changes; blank lines and `#` comments are skipped. The
+file lives in the job's directory, and a runner's comes home with the job.
+Skram reads it when the job ends:
+
+- No file, or no lines: the key is the checkout's and inputs' trees.
+- Lines: they replace those trees in the key. When every reported tree is
+  one the job started on, the outcome is also recorded under the start
+  trees, so the next identical run is skipped. When one is not (images
+  older than the checkout), it is recorded only under the reported trees,
+  and a run of the checkout's trees is never skipped by it.
+- A `dirty` line, or a line of any other shape, records nothing.
+
+The start trees must still be clean for anything to be recorded. Write the
+report before the tests start, so a red is recorded under what it tested.
 
 ## When a job fails: `--on-error`
 
