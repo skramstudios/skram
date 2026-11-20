@@ -66,6 +66,16 @@ list above is what it adds.
 
 Releases are built for macOS and Linux, on amd64 and arm64.
 
+With Homebrew on macOS (Homebrew 7 loads a cask only from a tap you trust):
+
+```bash
+brew trust skramstudios/tap
+brew install skramstudios/tap/skram
+```
+
+The cask installs the shell completions and clears macOS's quarantine flag.
+Otherwise, use the install script:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/skramstudios/skram/main/install.sh | sh
 skram version

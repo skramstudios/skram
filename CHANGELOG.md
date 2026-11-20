@@ -5,6 +5,12 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-11-20
+
+- **New:** install with Homebrew on macOS: `brew trust skramstudios/tap`, then
+  `brew install skramstudios/tap/skram`. The cask installs the shell
+  completions and clears the quarantine flag; `install.sh` still works.
+
 ## [0.22.0] — 2026-11-19
 
 - **New:** an `e2e:` block on a project in your config (`scopes`, `iterate`,
