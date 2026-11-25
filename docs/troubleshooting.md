@@ -148,8 +148,9 @@ A job sent to another machine waits in that runner's own lane,
 machine's jobs on the resource. A pending item that `queue list` marks
 `waiting for …` or `waiting for lease …`, or that `status` lists under
 "Waiting for a runner:" or "Waiting for a lease on a runner:", is waiting on
-the other machine, not stuck here: see [When the runner is off](runners.md#when-the-runner-is-off)
-and [Sharing a resource with the runner](runners.md#sharing-a-resource-with-the-runner).
+the other machine, not stuck here: see [When the runner is
+off](runners.md#when-the-runner-is-off) and [Sharing a resource with the
+runner](runners.md#sharing-a-resource-with-the-runner).
 
 To stop waiting: wait for the lane, take the item back, or end the job ahead
 of it.
@@ -316,13 +317,26 @@ Last 2 lines (all streams):
   bash /home/you/dev/apps/ops.sh boom
   could not reach the cluster
 Next:
-  - full log: skram logs J20260921_195642_7417fd
+  - no rule recognised this failure; reason_detail is the last line that looked like an error, and the tail above has more: skram logs J20260921_195642_7417fd --tail 80
   - re-run: skram run apps boom
 ```
 
 It takes a job id or an item id, `--lines N` for a longer tail, and `--json`
 for the same fields as an object. When the tail is not enough, the full log
 is `skram logs <job>`.
+
+The reason comes from one ordered list of rules over the last 200 lines of
+each stream, and `reason_detail` is the line the winning rule matched — for a
+red test suite, the test runner's own summary line. The list is in
+[MCP](mcp.md#explain).
+
+A job that ended before its target ran has the reason `start_failed`, and the
+detail names what stopped it: the job's process could not be started, the
+config no longer loads, the checkout or the project's Makefile, script,
+Taskfile or justfile is gone, or the target's tool (`make`, `bash`, `task`,
+`just`) is not on the job's `PATH`. Nothing of the target ran. Fix that cause,
+run `skram doctor` to check the rest of the machine's setup, and re-run the
+job.
 
 Exit codes a caller can branch on: the job's own code, or `124` for a
 `--timeout` that expired, `125` for an item cancelled before it ran, and
@@ -332,8 +346,10 @@ three; [how it works](how-it-works.md) has the table and its one caveat.
 ## Runner jobs
 
 A job sent to a runner ([runners](runners.md)) fails or waits for reasons a
-local job does not have. `skram runner check <name>` finds most of them; the
-rest are below.
+local job does not have. `skram runner list` shows, without contacting
+anyone, what the last hello to each runner found: whether it answered and
+how long ago, its free disk, and its Docker engine. `skram runner check
+<name>` asks again and finds most problems; the rest are below.
 
 ### `error saving credentials` (-25308) or `User interaction is not allowed`
 
@@ -360,22 +376,11 @@ skram run --runner studio api push --env DOCKER_CONFIG=/home/ci/.docker-jobs --e
 
 A runner that is asleep, off, or not answering SSH is waited for, not failed:
 the item stays pending and is tried again about once a minute. `skram runner
-check <name>` says which: when SSH works but the sleep row is `[--]`, the
-runner allows sleep, and its fix is on the line under it
-(`sudo pmset -a sleep 0 disablesleep 1` on the runner, or `caffeinate -s` on
-power). Waking the runner is enough for the item to start; do not enqueue it
-again. See [When the runner is off](runners.md#when-the-runner-is-off).
-
-### A build that reads a git submodule fails on a runner
-
-Git submodules are not initialised in the runner's worktree: a known gap.
-Once per worktree, initialise them there (the path pattern is in
-[Where things live on a runner](runners.md#where-things-live-on-a-runner),
-under the runner's data directory, `~/.local/share/skram` by default):
-
-```bash
-ssh me@studio.example.net 'git -C ~/.local/share/skram/runner/worktrees/<repo>/<checkout> submodule update --init --recursive'
-```
+check <name>` says which: when SSH works but the sleep row reads `sleep
+allowed`, the runner slept between jobs (a running job holds it awake, see
+[Keeping machines awake](runners.md#keeping-machines-awake)). Waking the
+runner is enough for the item to start; do not enqueue it again. See [When the
+runner is off](runners.md#when-the-runner-is-off).
 
 ## Reading `skram doctor`
 
@@ -388,6 +393,19 @@ oddly. Every line starts with one of three markers:
 | `[!!]` | A problem. Counted in the total at the end. |
 | `[--]` | Information: something optional that is off, absent, or worth knowing. Never counted. |
 
+The `disk` line is the free space on the volume holding Skram's data, measured
+now, against [`preflight.min_free_disk`](config.md#preflight). The `docker`
+line appears whenever a `docker` program is on `PATH`: it names the engine the
+program's current context reaches (on a machine with both Docker Desktop and
+OrbStack, the one it picks), the context, and the free space inside the
+engine. When a project that runs on this machine names `docker` in its
+[`tools:`](config.md#tools), an engine that does not answer, one below
+[`preflight.docker_min_free`](config.md#the-docker-engine), or no `docker` on
+`PATH` is a `[!!]` line with a `fix:` under it, since a job of that project
+would fail the same way. When no project uses Docker, the same line is `[ok]`
+or `[--]` and never counts as a problem. Each runner's line shows the same two
+values as that runner reported them.
+
 Indented lines belong to the line above: an indented `[!!]` is a problem with
 that project in particular, and an indented `run:` line is the command that
 fixes what precedes it.
@@ -397,6 +415,8 @@ fixes what precedes it.
 [ok] Config loaded (3 project(s), 0 workflow(s))
 [ok] Data directory: /home/you/.local/share/skram/logs
 [ok] Data directory: /home/you/.local/share/skram/queue
+[ok] disk on this machine (the volume holding /home/you/.local/share/skram): 120GB free (preflight.min_free_disk 5GB)
+[ok] docker on this machine: OrbStack (context orbstack), up, 31GB free
 [ok] notify: terminal-notifier (queued jobs notify on completion; herdr inside a session)
 [--] herdr: installed, no running session
 [ok] apps: 4 target(s) via script (/home/you/dev/apps)
@@ -424,6 +444,50 @@ the only `[!!]` line and the run stops there, with exit 1:
 
 ## Running out of disk
 
+A `disk_full` job usually never started: the
+[preflight](config.md#preflight) found less free space than
+`preflight.min_free_disk` (default 5GB) on the machine it would have run on,
+named in `reason_detail` with the space measured and the floor. Nothing was
+recorded in the ledger for it. Free space on that machine, then run it
+again; re-queueing it before then fails it the same way. When the
+[`reaper:`](config.md#reaper) block is on, Skram has already reaped once
+there before failing the job, and `reason_detail` ends with `a reap was
+tried first` and what it freed: what is left is not the reaper's to remove
+(other images, volumes, a cluster, old job directories). `skram doctor`
+shows this machine's free space now, and `skram runner list` each runner's
+as of its last hello.
+
+A `disk_full` job that did start means the disk filled while it ran:
+the target printed `no space left on device`, and `reason_detail` is that
+line. Inside a container that is the Docker engine's own disk, which can be
+full while the host has room. Free space the same way, then run it again.
+
+When `reason_detail` says **the Docker engine's storage**, it is the disk
+inside Docker Desktop or OrbStack that is short, against
+`preflight.docker_min_free` (default 10GB), whatever the host disk shows.
+Free space inside the engine: take down a local cluster that holds images
+and volumes (a `cluster-down` target, if the project has one), remove images
+and build cache (`skram reap --dry-run` shows what the reaper would remove),
+or raise the engine's disk limit in its settings.
+
+### The Docker engine is down
+
+A job that fails with reason `docker_down` never started: its project's
+`tools:` names `docker`, and the engine the `docker` program's current
+context reaches did not answer within 30 seconds. `reason_detail` names the
+machine, the context, and the engine's own error line. Skram has already
+[tried to start it once](config.md#starting-a-stopped-engine) when it is
+Docker Desktop or OrbStack and `preflight.start_docker` is not `false`;
+`reason_detail` then ends with the command it ran and how that ended.
+Start or restart the engine on that machine by hand (Docker Desktop,
+OrbStack, or the daemon), check it with `docker info`, then run the job
+again. Reaping cannot help: it needs the engine to answer.
+
+A job that had already started can fail with `docker_down` too: it printed
+that the engine stopped answering (`Cannot connect to the Docker daemon`,
+`Docker Desktop is unable to start`), and `reason_detail` is that line. The
+fix is the same. Neither reason says anything about the code.
+
 Two commands reclaim space, and neither is automatic on its own.
 
 **Old jobs.** Each job keeps three files forever until something removes
@@ -445,14 +509,16 @@ touched. Named tags never match the pattern and are never removed.
 ```bash
 skram reap --dry-run
 skram reap --cache-only --cache-budget 20GB
+skram reap --runner mini --dry-run
 ```
 
 It reads the [`reaper:` section of the config](config.md) for which
 repositories are eligible and what the budgets are; the flags override it for
-one run. If
-`reaper.after_targets` is configured, a reap also runs inside a matching job
-after it succeeds; `SKRAM_REAP_DISABLE=1` skips that automatic pass and
-leaves `skram reap` alone.
+one run. If `reaper.after_targets` is configured, a reap also runs inside a
+matching job after it succeeds; `SKRAM_REAP_DISABLE=1` skips that automatic
+pass and leaves `skram reap` alone. `--runner <name>` reaps a
+[runner](runners.md#reaping-a-runners-docker) instead, with this machine's
+`reaper:` section; a matching job sent to a runner reaps there.
 
 ## Environment variables
 
@@ -465,7 +531,7 @@ set for normal use.
 | `SKRAM_GUARD` | `0`, `false`, or `off` turns the guard off for that command, so a command line it would block runs instead. Any other value leaves the guard on. | unset (guard on) | the guard hook |
 | `SKRAM_HERDR` | Exactly `0` turns off herdr reporting — the row the processor keeps in each workspace's sidebar. Any other value leaves it on. | unset (on where herdr is installed) | the processor's herdr reporter, and `skram doctor` |
 | `SKRAM_NOTIFY` | Exactly `0` turns off job-end notifications, herdr and macOS alike. Any other value leaves them on. | unset (on) | the job-end notification, and `skram doctor` |
-| `SKRAM_REAP_DISABLE` | Exactly `1` skips the automatic reap that runs inside a job matching `reaper.after_targets`. `skram reap` run by hand is unaffected. | unset (automatic reap on where configured) | the post-job reap |
+| `SKRAM_REAP_DISABLE` | Exactly `1` skips the automatic reaps: the one inside a job matching `reaper.after_targets`, and the one the [preflight](config.md#reaping-once-before-failing) tries before failing a job on disk. `skram reap` run by hand is unaffected. Set on the machine that sends a job, it skips the job's reaps on the runner too. | unset (automatic reap on where configured) | the post-job reap, and the processor (the preflight's reap, and when it sends a job to a runner) |
 | `SKRAM_SSH` | The program every call to a [runner](runners.md) goes through, git's included, invoked as `<program> <destination> <command>`. | unset (`ssh`) | the processor, when it sends a job to a runner |
 
 When `SKRAM_ACTOR` is unset the actor is worked out from the environment the

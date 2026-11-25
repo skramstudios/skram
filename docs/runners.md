@@ -38,12 +38,25 @@ paragraph above.
 | `git` and `git-receive-pack` on the plain SSH `PATH` | `ssh <dest> 'command -v git git-receive-pack'` prints two paths | Install git (on macOS, the Command Line Tools: `xcode-select --install`, at the machine). The push and the checkout that precede every job run under the bare SSH `PATH`, not the login shell's. |
 | The login-shell `PATH` is what the jobs need | `ssh <dest> '$SHELL -lc "echo \$PATH"'` | Set it in `~/.zprofile` or `~/.bash_profile`, not `~/.zshrc`, or pass `--env PATH=…` on each job. |
 | Each tool the target runs is on that `PATH` | `ssh <dest> '$SHELL -lc "command -v node pnpm"'` (name your tools) prints a path for each | The same fix. Name the tools under [`tools:`](config.md#runners) so `doctor` and `runner check` look for them every time. |
-| On a Mac, the runner stays awake | `ssh <dest> 'pmset -g \| grep sleep'` shows `sleep 0` | On the runner, `sudo pmset -a sleep 0 disablesleep 1`, or keep it on power with `caffeinate -s`. |
+| On a Mac, the runner may sleep between jobs | none needed | Nothing: each job holds it awake ([Keeping machines awake](#keeping-machines-awake)). |
 
 A job that uses Docker Desktop on a Mac needs a logged-in desktop session on
 the runner, since Docker Desktop runs only inside one: log in once after each
-reboot. This machine must stay awake too: while it sleeps, nothing new is
-dispatched and a streaming connection drops.
+reboot. While this machine sleeps, nothing new is dispatched and a streaming
+connection drops; on a Mac it holds itself awake while any of its jobs runs,
+here or on a runner.
+
+### Keeping machines awake
+
+On macOS, every job holds the machine that runs it awake for exactly its
+length: Skram starts `caffeinate -i -m -s -w <pid>` bound to the job's
+process, so idle and system sleep wait until the job ends by exit, kill, or
+failure. For a job sent to a runner, the runner's Skram holds the runner
+awake, and the processor on this machine holds this one awake while it streams
+the job. A pending item, or one waiting for a runner or a lease, holds
+nothing. The display may still sleep, and closing a laptop's lid still sleeps
+it. Nothing needs `sudo` and no `pmset` setting changes. A Mac without
+`caffeinate`, and any other operating system, runs the job without it.
 
 `skram runner check` runs all of it, from here, in one command, and prints
 the fix under each row that fails (see [Checking a runner](#checking-a-runner)):
@@ -52,8 +65,8 @@ the fix under each row that fails (see [Checking a runner](#checking-a-runner)):
 skram runner check studio
 ```
 
-`skram runner add` declares the runner (see [Declaring a runner](#declaring-a-runner))
-and ends by running that check:
+`skram runner add` declares the runner (see [Declaring a
+runner](#declaring-a-runner)) and ends by running that check:
 
 ```bash
 skram runner add studio --ssh me@studio.example.net --tools node,pnpm
@@ -86,38 +99,60 @@ skram runner add studio --ssh me@studio.example.net --dry-run   # print the line
 
 It prints the lines it would add under `runners:` (with the `runners:` key
 when the config has none yet), then asks `Add to <config>? [Y/n]` in a
-terminal. Anywhere else it writes only with `--yes`; `--dry-run` writes
-nothing even with `--yes`, and so does `--json`, which prints `name`,
-`destination`, `tools`, `config`, `lines` (the exact text), and `written`
-(always false). The rest of the file, comments
-and key order included, is left as it was. It refuses a name already
-declared, `local`, a name outside the rule above, an `--ssh` with spaces in
-it, and a `--tools` entry that is not a command name, and writes nothing.
-After a write it runs `skram runner check` on the new runner (see
-[Checking a runner](#checking-a-runner)) and exits with its code, so a
-runner that cannot be reached yet is still declared and the command exits 1.
+terminal. Anywhere else it writes only with `--yes`; without one it prints the
+lines, writes nothing, and exits 1 with "Nothing written" on stderr, so a
+script does not mistake the proposal for a write. Answering `n` at the prompt
+exits 0. `--dry-run` writes nothing and exits 0, even with `--yes`, and so
+does `--json`, which prints `name`, `destination`, `tools`, `config`, `lines`
+(the exact text), and `written` (always false). The rest of the file, comments
+and key order included, is left as it was. It refuses a name already declared,
+`local`, a name outside the rule above, an `--ssh` with spaces in it, and a
+`--tools` entry that is not a command name, and writes nothing. After a write
+it runs `skram runner check` on the new runner (see [Checking a
+runner](#checking-a-runner)) and exits with its code, so a runner that cannot
+be reached yet is still declared and the command exits 1.
 
 ```bash
 skram runner list          # one line per runner: SSH destination, tools, projects that default to it
 skram runner list --json   # the same, keyed by runner name
 ```
 
-`skram runner list` reads the config only and contacts no runner:
+`skram runner list` reads the config and this machine's record of each
+runner's last answer, and contacts no runner:
 
 ```text
-RUNNER     SSH                    TOOLS               DEFAULT FOR
-build-box  build-box              -                   -
-studio     me@studio.example.net  node, pnpm, docker  api
+RUNNER     SSH                    TOOLS               DEFAULT FOR  LAST PROBE             FREE DISK  DOCKER
+build-box  build-box              -                   -            unreachable, 2h5m ago  -          -
+mini       mini                   -                   -            never                  -          -
+studio     me@studio.example.net  node, pnpm, docker  api          ok, 3m ago             120GB      OrbStack (context orbstack), up, 31GB free
 ```
+
+`LAST PROBE` is the outcome of the last hello (the first call Skram makes to a
+runner before a job, and in `runner check` and `doctor`) this machine made to
+the runner (`ok`, `unreachable`, `declined`, or `never` when there has been
+none) and how long ago it was, so a machine that went offline shows as
+`unreachable` rather than looking fine. `FREE DISK` is the free space that
+hello measured on the volume holding Skram's data there. `DOCKER` is the
+Docker engine the runner's `docker` context reached (`Docker Desktop`,
+`OrbStack` or `Docker Engine`), the context, `up` or `down`, and the free
+space inside its storage; Skram measures the engine only in a hello for a
+project whose [`tools:`](config.md#tools) names `docker`. A later hello that
+did not ask keeps what the last one found and adds how old it is (`as of 3h
+ago`). `-` is a value no hello has measured (an unreachable runner, an older
+Skram there, or Docker never asked for), never zero. To refresh the columns,
+run `skram runner check <name>` (see [Checking a runner](#checking-a-runner)).
 
 With `--json` it prints one object keyed by runner name, each with
 `destination`, `tools`, and `projects` (the projects whose `runner:` is that
-runner); `tools` and `projects` are always lists, empty when there are none,
-and the object is `{}` when no runner is declared. With none declared, the
-plain output says so and names `skram runner add <name> --ssh <dest>`, and
-`skram doctor` prints `[--] runners: none declared` as information.
-`skram discover --json` carries the same names under `runners`, each with
-`destination` and `tools`.
+runner), plus the same fields as `skram status --json`'s `runners` (`outcome`,
+`at`, `last_contact_seconds`, `host_free_bytes`, `docker_answered`,
+`docker_engine`, `docker_context`, `docker_error`, `docker_free_bytes` and the
+rest; see [`status`](mcp.md#status)); `tools` and `projects` are always lists,
+empty when there are none, a field not measured is absent, and the object is
+`{}` when no runner is declared. With none declared, the plain output says so
+and names `skram runner add <name> --ssh <dest>`, and `skram doctor` prints
+`[--] runners: none declared` as information. `skram discover --json` carries
+the same names under `runners`, each with `destination` and `tools`.
 
 ## Sending a job
 
@@ -159,7 +194,10 @@ projects:
 
 With `runner:` set, `skram run api test`, the MCP `run` tool, and the TUI's
 Launch tab send the job to that runner with no flag, and `--runner local` (or
-an empty `--runner=`) runs one here. An ephemeral target always runs here. A
+an empty `--runner=`) runs one here. In the Launch tab, `ctrl+r` cycles the
+runner (`local` and every declared runner, the project's default chosen first)
+before `Enter`; the footer shows the chosen runner and its lane, and an
+ephemeral target offers no choice. An ephemeral target always runs here. A
 name that is not in `runners:` is a config error. `skram discover`
 (`runner` in `--json`) and the project's MCP resource
 `skram://projects/<name>` show the default. A workflow's steps run here.
@@ -170,8 +208,26 @@ A job sent to a runner carries `@<runner>` after its label wherever a label is
 shown: `skram status`, `skram queue list`, `skram logs`, the TUI's Jobs and
 Queue tabs, the dashboard, and the herdr sidebar (`build (api--T-3) @build-box
 1m20s/4m10s`). The item, its `status.json`, and the JSON of `run`, `status`,
-`queue list`, `wait`, and `explain` carry `runner`. A job's estimate is the
-same wherever it runs.
+`queue list`, `wait`, and `explain` carry `runner`. A job's estimate prefers
+the history of the machine it runs on: that runner's own past runs when it has
+any, else every run (see [Estimates](how-it-works.md#estimates)), and `wait
+--timeout auto` follows it.
+
+A job sent to a runner records its phase on its item as it goes: `checking`
+(the runner's hello, and sending it this machine's skram when it differs),
+`shipping` (pushing a checkout's commit), `preparing` (resetting the runner's
+worktree to it; with inputs, each repo is shipped then prepared in turn),
+`setup` (the project's [`setup:`](config.md#setup) target, when it has one),
+`running` (the target), and `homing` (bringing the job's files home). `skram
+status` prints it on the running job's line, and `status --json` and `queue
+list --json` carry it as `phase` on the running job and item. A job that
+stays `shipping` is pushing a large commit, not hung. A local job is
+`running`; a pending item, one waiting for its runner or a lease, and a
+finished job have no phase.
+
+The TUI shows both: a running row in Jobs carries its phase (a local job's plain
+`running` is left out), and the Queue tab's `state` column says why a pending
+item waits, in the same words as `skram status`.
 
 Lanes name the runner too: `skram status`'s Lanes block and each running
 job's `Lane:` line, `cluster@studio` in `queue list` after a live item's label
@@ -213,7 +269,7 @@ that is not there.
 
 | If you assume | What is true |
 |---|---|
-| A runner has a Skram command to run, or something keeps running there | The `skram runner` commands run here. Nothing runs on a runner between jobs. See [Declaring a runner](#declaring-a-runner). |
+| A runner has a Skram command to run, or something keeps running there | The `skram runner` commands run here. Nothing runs on a runner between jobs, apart from a [reap you ask for](#reaping-a-runners-docker). See [Declaring a runner](#declaring-a-runner). |
 | The runner needs Skram installed and configured | It needs neither: this machine sends its binary and a config for each job, and a `skram` already on the runner is never used for a sent job. See [What goes to the runner](#what-goes-to-the-runner). |
 | Declaring runners makes the queue spread jobs | Nothing picks a runner. A job goes where `--runner` or its project's `runner:` says, else it runs here. To use three machines, enqueue three jobs: see [Splitting a suite across runners](#splitting-a-suite-across-runners). |
 | You run `skram`, or the tests, on the runner | Enqueue, `wait`, and read logs here only. Nothing needs a login on the runner after setup. |
@@ -240,22 +296,31 @@ When a sent job's lane lets it start:
    here: your index, stash, branches, tags, and remotes are untouched, in both
    repositories, and after the first job only the objects the runner lacks
    cross the network.
-3. The runner checks that commit out into a worktree it keeps for this
+3. Each git submodule initialised in the checkout goes the same way, nested
+   ones too: see [Submodules](#submodules).
+4. The runner checks that commit out into a worktree it keeps for this
    checkout: tracked files are reset to it and untracked files left by an
    earlier job are removed, but files git ignores stay for the next job, so
    caches persist between jobs of one checkout. Two jobs that would use one
    worktree on one runner (two projects in one checkout, or a job reading
    as an input the checkout another runs in) never run at once: the second
    stays pending until the first ends.
-4. The job runs there detached, so it survives the SSH session, with a config
-   Skram sends for that job. It never enters the runner's own queue.
-5. While it runs, its output streams back line by line into this machine's
+5. The job runs there detached, so it survives the SSH session, with a config
+   Skram sends for that job. It never enters the runner's own queue. A
+   project with a [`setup:`](config.md#setup) target runs it first in that
+   worktree, as its own step; when it fails, the job ends as `setup_failed`
+   and the target never starts.
+6. While it runs, its output streams back line by line into this machine's
    job directory, so `skram logs -F`, `skram logs --json`, and `skram run -f`
    show it as it happens, and `skram status` shows the job running on its
    runner.
-6. When it ends, its `raw.log`, `events.jsonl`, and `status.json` are copied
+7. When it ends, its `raw.log`, `events.jsonl`, and `status.json` are copied
    into this machine's job directory, so `logs`, `explain`, history, and
-   estimates read it like any other job.
+   estimates read it like any other job. So is its `artifacts.tar.gz`: the
+   runner packs the project's
+   [`artifacts:`](config.md#artifacts-and-artifacts_limit) from its worktree
+   as the job ends, even after a kill, so a trace the next job there would
+   wipe is read here, never on the runner.
 
 The project must sit in a git checkout, and its script, Makefile, Taskfile, or
 justfile must be inside that checkout (a project in a subdirectory of the
@@ -270,8 +335,35 @@ and `explain` record what went as `sent`:
 ```
 
 `commit` is exactly the code the job ran; `dirty` says whether it carried
-uncommitted changes on top of `head`, and when it is `false`, `commit` is
-`head`.
+uncommitted changes on top of `head`, in the checkout or in one of its
+submodules, and when it is `false`, `commit` is `head`. A checkout with
+submodules adds `submodules`, below.
+
+### Submodules
+
+A submodule initialised in the checkout travels as the checkout does, from
+this machine over the same SSH connection: its commit (the one the
+checkout records for it), or a commit on it holding its uncommitted changes,
+is pushed into the runner's own clone of that submodule, and the runner sets
+the submodule in the checkout's worktree to it. A submodule inside a
+submodule goes the same way. The runner never fetches: it needs no network
+access and no credentials for a submodule's remote. Files git ignores in a
+submodule stay here, as in the checkout.
+
+The runner's worktree mirrors your checkout. A submodule with uncommitted
+changes makes the job's `sent` `dirty`, so a [ledgered](config.md#ledger)
+target records nothing. A submodule you have not initialised here
+(`git submodule update --init --recursive`) is absent there too, an empty
+directory, and the job's events hold one warning tagged `missing_submodule`
+naming each one; the job runs anyway, since the same build would fail here.
+
+`sent` lists each submodule shipped, by its path from the checkout's root:
+
+```json
+"sent": {"head": "3f9c…", "commit": "3f9c…", "dirty": true, "submodules": [
+  {"path": "deps/common", "head": "8b21…", "commit": "c07d…", "dirty": true},
+  {"path": "deps/common/inner", "head": "51e0…", "commit": "51e0…", "dirty": false}]}
+```
 
 ### Where things live on a runner
 
@@ -282,9 +374,9 @@ all of it:
 | Path | Holds |
 |---|---|
 | `bin/skram` | the binary this machine sent |
-| `repos/<repo>.git` | one bare clone per repo, named by its `repos:` entry, else its folder; every checkout of a repo shares it |
-| `worktrees/<repo>/<checkout>` | one worktree per checkout, named by the checkout's folder, where its ignored caches live |
-| `logs/` | the runner's copy of each job's `raw.log`, `events.jsonl`, and `status.json` |
+| `repos/<repo>.git` | one bare clone per repo, named by its `repos:` entry, else its folder; every checkout of a repo shares it, and a submodule gets one too |
+| `worktrees/<repo>/<checkout>` | one worktree per checkout, named by the checkout's folder, where its ignored caches live; each submodule in it is a worktree of the submodule's clone; removed once idle (see [Runner storage](#runner-storage)) |
+| `logs/` | the runner's copy of each job's `raw.log`, `events.jsonl`, `status.json`, and `artifacts.tar.gz` |
 | `runs/<job>` | the config sent for one job and the detached process's output |
 
 The leases are beside it, in `$XDG_DATA_HOME/skram/leases`: one file per
@@ -295,16 +387,38 @@ what it last heard from each runner (see [Checking a runner](#checking-a-runner)
 Two checkouts of one repo whose folders share a name would share a worktree, so
 a job that reads both is refused; rename one.
 
+### Runner storage
+
+Each job sent to a runner first removes, on that runner, what has been idle
+longer than the runner's [`prune_after:`](config.md#runners) (default `72h`;
+`0` turns this off):
+
+- a worktree whose last job ended, and which no job has been prepared in,
+  longer ago than that;
+- the `logs/<job>` and `runs/<job>` of a job whose files came home longer ago
+  than that.
+
+A worktree a running job uses, a job that is running, and a job whose files
+never came home are kept, and so are the clones under `repos/`, so the next
+job for a removed checkout name gets a fresh worktree from the clone. What was
+removed (a count and the bytes) is one line in this machine's
+`queue-processor.log`; the job's own events do not mention it. Nothing there
+fails the job.
+
+A removed worktree loses its ignored files: an install your setup target
+rebuilds comes back on the next job, slower once; anything you copied into the
+worktree by hand is gone after it sat idle for `prune_after`.
+
 ### Inputs
 
 A project with [inputs](config.md#inputs) sends every checkout it reads. Each
-input's checkout, the one the job resolved here (`-C`, your working
-directory, or the repo's default), goes to the runner like the project's own:
-one commit into the runner's clone of that repo, checked out into a worktree
-kept for that checkout. On the runner each input variable names that
-worktree, and `SKRAM_INPUT_<VAR>_DEFAULT` is set only when the input is on
-its default checkout (to the same worktree), since the default checkout
-itself does not travel. Each input in the `inputs` of the item and
+input's checkout, the one the job resolved here (`-C`, your working directory,
+or the repo's default), goes to the runner like the project's own: one commit
+into the runner's clone of that repo, checked out into a worktree kept for
+that checkout, with its [submodules](#submodules). On the runner each input
+variable names that worktree, and `SKRAM_INPUT_<VAR>_DEFAULT` is set only when
+the input is on its default checkout (to the same worktree), since the default
+checkout itself does not travel. Each input in the `inputs` of the item and
 `status.json` records its own `sent`:
 
 ```json
@@ -313,10 +427,41 @@ itself does not travel. Each input in the `inputs` of the item and
 
 The config the runner receives holds the job's project, with its path and
 every input's pointing at the runner's worktrees, and only the `repos:`
-entries the job reads; no other project or repo leaves this machine. The
-target sees the same `env:` values, `--env` values, `SKRAM_ACTOR`, and herdr
-workspace and session as it would here. An input checkout removed before the
-job starts fails it as `checkout_removed`, and the runner is never contacted.
+entries the job reads, plus this machine's `reaper:` section; no other project
+or repo leaves this machine. The target sees the same `env:` values, `--env`
+values, `SKRAM_ACTOR`, and herdr workspace and session as it would here. An
+input checkout removed before the job starts fails it as `checkout_removed`,
+and the runner is never contacted.
+
+## Reaping a runner's Docker
+
+Image builds fill a runner's Docker disk as they fill this machine's. The
+[`reaper:` section](config.md#reaper) of this machine's config goes with every
+sent job, so a job whose project and target match `after_targets:` and that
+succeeds reaps on the runner afterwards, inside the job: the reap's lines are
+in the job's log before it ends, and it never fails the job.
+`SKRAM_REAP_DISABLE=1` here skips that reap there too.
+
+To reap a runner now, name it:
+
+```bash
+skram reap --runner mini --dry-run    # what would be removed there
+skram reap --runner mini              # remove it
+```
+
+The reap runs on the runner with this machine's `reaper:` section and the
+command's own flags (`--dry-run`, `--keep`, `--cache-budget`, `--images-only`,
+`--cache-only`); its output streams back and the exit code is the reap's. The
+runner needs no Skram config, and nothing is queued, so it can run while a job
+builds there: an image that job is using survives, because its removal fails
+and is skipped. A name not under `runners:` is refused with the declared ones;
+`--runner local` is the plain reap on this machine. A runner whose owner
+[declines runner jobs](#declining-runner-jobs) declines this too.
+
+`image_repos:` globs match the repository name as `docker image ls` prints it
+on the machine being reaped, and `*` never crosses a `/`. Images a runner
+builds for itself (`skram-e2e-app`, say) have no registry prefix, so they need
+their own glob (`skram-e2e-*`) beside `localhost:6001/*`.
 
 ## Sharing a resource with the runner
 
@@ -333,13 +478,13 @@ its own machine's copy.
 
 When a job is sent and the runner's lease is held, nothing starts there and
 the job does not fail: the item goes back to pending at the head of its lane,
-waiting for the lease, and Skram asks the runner again about once a minute.
-It is sent as soon as the lease is free. If the runner stops answering while
-the item waits, it waits for the runner instead (`waiting_for_runner`, as in
-[When the runner is off](#when-the-runner-is-off)), and once the runner
-answers it is sent, or waits for the lease again. On the runner, an item of its own
-queue whose resource is leased to a job sent there waits the same way and
-starts by itself when that job ends.
+waiting for the lease, and Skram asks the runner again about once a minute. It
+is sent as soon as the lease is free. If the runner stops answering while the
+item waits, it waits for the runner instead (`waiting_for_runner`, as in [When
+the runner is off](#when-the-runner-is-off)), and once the runner answers it
+is sent, or waits for the lease again. On the runner, an item of its own queue
+whose resource is leased to a job sent there waits the same way and starts by
+itself when that job ends.
 
 ```bash
 skram status                  # "Waiting for a lease on a runner:" names the resource, runner, holder, and ETA
@@ -371,10 +516,9 @@ Leases on this machine:
 ```
 
 A lease whose job died (a crash, `kill -9`) or that was taken before the
-machine last booted is taken over by the next job that wants the resource,
-so a dead job never holds one for ever.
-Each takeover is a `lease_reclaimed` line in
-`$XDG_DATA_HOME/skram/leases/events.jsonl`, and the queue processor's log
+machine last booted is taken over by the next job that wants the resource, so
+a dead job never holds one for ever. Each takeover is a `lease_reclaimed` line
+in `$XDG_DATA_HOME/skram/leases/events.jsonl`, and the queue processor's log
 names it too.
 
 ## Stopping a runner job
@@ -453,6 +597,33 @@ way to run it here instead:
 | `runner_unreachable` | The runner answered, but a call there kept failing before the job started. Nothing ran. |
 | `runner_lost` | The job started, but contact was lost and every reattach failed. It may still be running there. |
 | `runner_declined` | The runner's owner set `accept_runner_jobs: false` there (see [Declining runner jobs](#declining-runner-jobs)). Nothing ran, and nothing was retried. |
+| `setup_failed` | The project's [`setup:`](config.md#setup) target failed in the runner worktree, so the target never started. The tail shows the setup's output. |
+| `missing_tool` | A command the project's [`tools:`](config.md#tools) names is not on the runner's login-shell `PATH`. Nothing was sent. |
+| `disk_full` | The runner is short of disk: its host disk, or for a project that uses Docker, the engine's storage. Nothing was pushed. |
+| `docker_down` | The project uses Docker and the engine the runner's `docker` context reaches did not answer. Nothing was pushed. |
+
+The last three come from the checks Skram makes in its first call to the
+runner, before anything is pushed, and `reason_detail` names the runner and
+what it found.
+
+- **`missing_tool`**: put the tool on the runner's login-shell `PATH`
+  (`~/.zprofile` or `~/.bash_profile`), confirm with `skram runner check
+  <name>`, then run the job again.
+- **`disk_full`**: the floor is this machine's
+  [`preflight.min_free_disk`](config.md#preflight) (default 5GB) for the
+  volume holding Skram's data on the runner, or
+  [`preflight.docker_min_free`](config.md#the-docker-engine) (default 10GB)
+  inside the Docker engine. With the [`reaper:`](config.md#reaper) block on,
+  Skram has already [reaped there once](config.md#reaping-once-before-failing)
+  and `reason_detail` ends with what that freed. Free space on the runner
+  (`skram reap --runner <name>`, see [Reaping a runner's
+  Docker](#reaping-a-runners-docker)), or run the job here.
+- **`docker_down`**: for Docker Desktop and OrbStack, Skram has already
+  [started the engine there once](config.md#starting-a-stopped-engine), and
+  `reason_detail` names the command and how it ended. Restart the engine on
+  the runner, or run the job here. A job that had started and then printed
+  that the engine stopped answering gets the same reason, with that line as
+  `reason_detail`.
 
 A runner that cannot be reached at all is not a failure: see
 [When the runner is off](#when-the-runner-is-off).
@@ -467,28 +638,40 @@ one line per runner:
 [--] runner studio (me@studio.example.net): reachable, darwin/arm64, no skram yet (the first job sends this machine's v0.19.0 (engine 0.19.0)); data ~/.local/share/skram/runner; last contact never
 [!!] runner old-box: unreachable through ssh: runner call hello exited 255: ssh: connect to host old-box port 22: Connection refused; last contact 2h5m ago (unreachable)
 [--] runner lab-mac: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0), declines runner jobs (accept_runner_jobs: false there); data ~/.local/share/skram/runner; last contact 1d3h ago (declined)
-[!!] runner mini: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner; login PATH /usr/bin:/bin:/usr/sbin:/sbin; missing on login PATH: node, pnpm; last contact just now
+[!!] runner mini: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner; login PATH /usr/bin:/bin:/usr/sbin:/sbin; missing on login PATH: node, pnpm; disk: 120GB free (preflight.min_free_disk 5GB); last contact just now
+[ok] runner pc: reachable, darwin/arm64, skram v0.19.0 (engine 0.19.0); data ~/.local/share/skram/runner; login PATH /opt/homebrew/bin:/usr/bin:/bin; disk: 120GB free (preflight.min_free_disk 5GB); docker: OrbStack (context orbstack), up, 31GB free; last contact 1m ago
 ```
 
 A reachable runner's line gives the `PATH` a job there gets from the login
 shell. Every line ends with the last contact before this one: how long ago
-this machine last said hello to the runner (`never` when it has not), with
-the outcome when that hello did not get an ordinary answer. A
-runner that is unreachable, or of another OS or architecture, is an issue
-and makes `doctor` exit 1, and so is one missing a tool its `tools:` names
-from that `PATH`, or missing `git` or `git-receive-pack` from the plain SSH
-`PATH` every job's push runs under. One with no Skram or another build is
-information only: the next job sends this machine's. A runner still on an
-older Skram build reports no `PATH` until the next job replaces it.
-`skram runner check` is the row-by-row form of that line, with the fix
-under each failed row.
+this machine last said hello to the runner (`never` when it has not), with the
+outcome when that hello did not get an ordinary answer. A runner that is
+unreachable, or of another OS or architecture, is an issue and makes `doctor`
+exit 1, and so is one missing a tool its `tools:` names from that `PATH`, or
+missing `git` or `git-receive-pack` from the plain SSH `PATH` every job's push
+runs under. One with no Skram or another build is information only: the next
+job sends this machine's. A runner's free disk follows, against this machine's
+[`preflight.min_free_disk`](config.md#preflight); below it is an issue. When a
+project that defaults to the runner, or the runner's own `tools:`, names
+`docker`, the hello also asks for the Docker engine there, and the line names
+it and its context: an engine that does not answer, or one below
+[`preflight.docker_min_free`](config.md#the-docker-engine), is an issue. A
+value the runner's Skram did not measure is left out. A runner still on an
+older Skram build is probed through plain `sh` instead, so its `PATH`, `git`
+and tools are checked too; "not probed" appears only when that probe could not
+run at all. `skram runner check` is the row-by-row form of that line, with the
+fix under each failed row.
 
 The queue keeps each runner's last answer in
 `$XDG_DATA_HOME/skram/runners/<name>.json` on this machine, written after
 every hello it makes: before a dispatch, while an item waits for the runner,
 and in `runner check` and `doctor`. `skram status --json` carries those files
-as `runners`, each with `last_contact_seconds`, without contacting anyone
-(the fields are under [`status`](mcp.md#status)).
+as `runners`, each with `last_contact_seconds`, without contacting anyone (the
+fields are under [`status`](mcp.md#status)). The hello before a job of a
+project whose `tools:` names `docker` also measures the runner's Docker
+engine, so the file records which engine its `docker` context reached, whether
+it answered, and its free space; a runner on an older Skram reports none of
+that, which fails nothing.
 
 ```bash
 skram runner check                            # every declared runner, in name order
@@ -499,7 +682,8 @@ skram runner check studio --json              # the same rows as data
 It asks each runner once (a second call asks a macOS runner's `pmset` about
 sleep) and prints one row per item: SSH, OS and architecture, the Skram build
 there, whether it accepts jobs, `git` on the plain SSH `PATH`, the login-shell
-`PATH`, each tool, and sleep. `check` sends nothing and pushes nothing, so it
+`PATH`, each tool, free disk, the Docker engine when the tools it looks for
+name `docker`, and sleep. `check` sends nothing and pushes nothing, so it
 is safe to run at any time.
 
 ```text
@@ -513,18 +697,30 @@ runner studio (me@studio.example.net)
 [ok] node on the login PATH
 [!!] pnpm missing from the login PATH
      fix: add its directory to PATH in the runner's login profile (~/.zprofile or ~/.bash_profile; ~/.zshrc is not read), or pass --env PATH=… on each job
-[--] sleep allowed (pmset sleep 10): an idle runner goes to sleep and jobs wait for it
-     fix: on the runner: sudo pmset -a sleep 0 disablesleep 1, or keep it on power with caffeinate -s
+[ok] disk: 120GB free (preflight.min_free_disk 5GB)
+[ok] docker: OrbStack (context orbstack), up, 31GB free
+[--] sleep allowed (pmset sleep 10): jobs hold the machine awake while they run
 ```
 
 `[!!]` is a problem a job would hit, and makes `check` exit 1; `[--]` is
-information. When SSH fails, that row and its fix are all a runner gets,
-since nothing else can be asked. With no name it checks every declared
-runner. `--tools a,b` replaces the runner's `tools:` for this one call.
-`--json` prints an object keyed by runner name, each a list of rows in the
-order above: `name` (`ssh`, `platform`, `build`, `accepts`, `git`,
-`login_path`, `tool:<name>`, `sleep`), `ok` (false only for `[!!]`), `warn`
-(true for `[--]`), `detail`, and `fix` (absent when there is none).
+information. When SSH fails, that row and its fix are all a runner gets, since
+nothing else can be asked. With no name it checks every declared runner. The
+tools it looks for are the runner's own `tools:` plus the
+[`tools:`](config.md#tools) of every project whose default runner it is, each
+once; `--tools a,b` replaces that list for this one call. The disk row is the
+free space on the volume holding Skram's data there, against this machine's
+[`preflight.min_free_disk`](config.md#preflight): below it, the row fails, as
+a job sent there would. The Docker row names the engine the runner's `docker`
+context reached (on a machine with both Docker Desktop and OrbStack, the one
+its current context picks) and fails when the engine does not answer (`docker:
+down (context desktop-linux): <its error>`) or has less free space inside than
+[`preflight.docker_min_free`](config.md#the-docker-engine). A runner whose
+Skram is too old to measure either gets a `[--] … not measured` row, which
+fails nothing; the next job sends it this machine's. `--json` prints an object
+keyed by runner name, each a list of rows in the order above: `name` (`ssh`,
+`platform`, `build`, `accepts`, `git`, `login_path`, `tool:<name>`, `disk`,
+`docker`, `sleep`), `ok` (false only for `[!!]`), `warn` (true for `[--]`),
+`detail`, and `fix` (absent when there is none).
 
 ## Declining runner jobs
 

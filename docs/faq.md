@@ -89,9 +89,10 @@ Practically, inside any worktree:
   code, still through the project's lane. From the configured checkout, or
   from a directory that is not a checkout of the repo, it runs in the
   project's configured `path:`.
-- `-C <dir>` names the checkout explicitly and always wins, so
-  `skram run apps build -C ~/dev/apps` from a worktree runs in the configured
-  checkout. See [running in another checkout](how-it-works.md#running-in-another-checkout--c).
+- `-C <dir>` names the checkout explicitly and always wins, so `skram run apps
+  build -C ~/dev/apps` from a worktree runs in the configured checkout. See
+  [running in another
+  checkout](how-it-works.md#running-in-another-checkout--c).
 - `skram discover` in a worktree reads the worktree's own file, so a target
   only that branch has is listed, and it says which checkout it read.
 - Omitting the project name works when the directory you are in belongs to
@@ -161,7 +162,9 @@ and nothing takes the next item until a new processor starts, which the next
 `skram run` or `skram release` does. The stale rows are cleared by `skram
 queue reset`. [Troubleshooting](troubleshooting.md) has the full sequence.
 
-Skram does nothing special about the machine sleeping. Processes suspend and
+On macOS a running job holds the machine awake (see [Keeping machines
+awake](runners.md#keeping-machines-awake)), but closing a laptop's lid, or
+another operating system, can still sleep it mid-job. Processes suspend and
 resume with it, and elapsed time is counted on the clock, so a job that
 spanned a sleep reads as overdue against its estimate and records a duration
 that includes the time asleep. That run then makes future estimates for the

@@ -5,6 +5,213 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-11-24
+
+Runners get the checkout's submodules, a setup step, a phase you can watch,
+and storage that prunes itself, and every job now checks the machine it starts
+on (free disk, the tools it needs, the Docker engine), reaping or starting the
+engine once before it fails a job for them.
+
+What changes on upgrade, with no config edit:
+
+- Every job checks free disk first and fails as `disk_full` below 5GB
+  (`preflight.min_free_disk`; `0` turns it off).
+- A project whose `tools:` names `docker` fails as `docker_down` when its
+  engine does not answer, and as `disk_full` below 10GB inside the engine
+  (`preflight.docker_min_free`).
+- `skram runner check` and `skram doctor` exit 1 on a short disk or a down
+  engine.
+- A runner removes worktrees idle longer than 72h, ignored files included
+  (`prune_after:`).
+- `skram runner add` and `skram init --detect` exit 1 when nothing was written
+  for want of a terminal and `--yes`.
+- A failure's `reason` and `reason_detail` may differ for the same output, and
+  five reasons nothing ever set are gone.
+- The MCP `wait` tool returns after at most 25 minutes.
+
+### New
+
+- A job sent to a runner gets the checkout's git submodules, nested ones too,
+  at the commit the checkout records, pushed from this machine; the runner
+  needs no access to their remotes. A submodule with uncommitted changes ships
+  them and marks the job's `sent` dirty, so a ledgered target records nothing;
+  one you have not initialised is absent there, with a `missing_submodule`
+  warning. `sent` lists them under `submodules`. The manual `git submodule
+  update` on the runner is no longer needed.
+- `setup:` on a project names a target that runs first, as its own step, in
+  every job sent to a runner and every local job in a worktree or another
+  clone; jobs in the project's `path:` skip it. A failing setup ends the job
+  as `setup_failed` before the target starts, and `skram explain` says so.
+  `skram discover --json` shows it as `setup`.
+- `skram status` shows what a running job is doing, its phase, on its line,
+  and `status --json` and `queue list --json` carry it as `phase`. A job sent
+  to a runner goes `checking`, `shipping`, `preparing`, `running`, `homing`,
+  so a large push no longer looks like a hang; a local job is `running`.
+  Either is in `setup` while the project's setup target runs.
+- A runner's disk stops growing: each job sent to it removes the worktrees
+  nobody used and the job files that came home longer ago than the runner's
+  `prune_after:` (default `72h`, `0` keeps everything). **Behaviour change:**
+  a runner worktree's ignored files (installs, caches, anything copied in by
+  hand) are gone after it sits idle that long; the setup target rebuilds an
+  install on the next job.
+- A project's `tools:` names the commands its targets need. Before a job
+  starts, each is looked up on the `PATH` of the machine it will start on,
+  this one or a runner's login shell; a missing one fails the job at once with
+  reason `missing_tool`, naming the tool and the machine, and nothing is sent
+  to the runner. `discover --json` shows a project's `tools`, and `explain`
+  says what to fix. A runner's own `tools:` still only warns.
+- A project's `artifacts:` globs (with `artifacts_limit`, default `500MB`)
+  name files a job makes, such as test traces, reports and logs. When a job
+  ends, passed, failed or killed, the matches are packed into
+  `artifacts.tar.gz` in its job directory; a job sent to a runner brings its
+  archive home. `wait --json` and `explain --json` name it as `artifacts`,
+  `status --json` as `most_recent_artifacts`, and `explain` prints it. The
+  globs are relative to the project's directory in the checkout.
+- `skram runner list` shows what the last contact with each runner found,
+  without contacting it: `LAST PROBE` (`ok`, `unreachable`, `declined` or
+  `never`, and how long ago), `FREE DISK`, and `DOCKER` (the engine its
+  `docker` context reached, e.g. `OrbStack (context orbstack), up, 31GB
+  free`); `-` is a value that was not measured. `--json` carries the same
+  fields as `skram status --json`'s `runners`, which now also documents
+  `host_free_bytes`. `skram runner check` gains a `disk` row and, for a runner
+  whose projects use Docker, a `docker` row; `skram doctor` gains this
+  machine's disk and Docker lines, and each runner's line shows its disk and
+  engine.
+- `skram reap --runner <name>` reaps a runner's Docker now, with this
+  machine's `reaper:` section and the command's flags; the output streams back
+  and the runner needs no config. A job sent to a runner that matches
+  `reaper.after_targets` now reaps on the runner afterwards, inside the job,
+  as a local job does. On an engine using the containerd image store, a reap
+  logs one line explaining why a build cache prune can report 0B.
+- `reaper.tag_patterns` takes several tag patterns, each keeping its own
+  newest `keep_tags` per repository, and `reaper.keep` lists `repository:tag`
+  globs that are never removed. Newest now means the image's creation time,
+  not the tag text. `tag_pattern` still works as a one-item list; setting both
+  keys is an error.
+- On macOS a running job holds its machine awake for exactly its length
+  (`caffeinate`, bound to the job's process), on this machine and on a runner,
+  and this machine stays awake while it streams a runner job. Pending and
+  waiting items hold nothing. `skram runner check` now reports a runner that
+  allows sleep as information, with no fix to apply.
+- The TUI's Launch tab has a runner picker: `ctrl+r` cycles `local` and each
+  declared runner, starting on the project's default, and the footer shows
+  where the job will wait. The Queue tab says why a pending item waits (for a
+  runner, since when and when the next try is; for a lease, who holds it and
+  when it should free), and a running job's row in Jobs shows its phase, in
+  the same words as `skram status`.
+
+### Changed
+
+- **On by default:** before a job starts, Skram checks free disk on the
+  machine it will run on, this one or a runner, against the new
+  `preflight.min_free_disk` (default `5GB`; `0` turns it off). A job on a
+  machine below the floor fails at once with reason `disk_full`, naming the
+  machine, the free space and the floor, instead of starting; a runner job
+  fails before anything is sent. Ephemeral targets are not checked. `skram
+  explain` says what to free.
+- **On by default:** a job of a project whose `tools:` names `docker` first
+  checks the Docker engine its `docker` context reaches on the machine it will
+  run on (Docker Desktop, OrbStack, or a plain daemon). An engine that does
+  not answer within 30 seconds fails the job at once with the new reason
+  `docker_down`; less free space inside the engine's own storage than the new
+  `preflight.docker_min_free` (default `10GB`; `0` turns it off) fails it with
+  `disk_full`, the detail naming the engine and context. A runner's engine is
+  checked before anything is sent to it, and `skram status --json` shows what
+  the last check found.
+- When a job's preflight finds a disk floor short and the `reaper:` block is
+  on, Skram reaps once on that machine (a runner's too, before anything is
+  sent to it) and measures again before failing the job. The reap is a step of
+  its own in the job's log and is never queued. With room after it, the job
+  runs; still short, it fails `disk_full` and `reason_detail` says a reap was
+  tried and what it freed. A `docker_down` engine is never reaped.
+  `SKRAM_REAP_DISABLE=1` turns this reap off too.
+- When a job's Docker engine does not answer, Skram starts it once on that
+  machine (`docker desktop start` for Docker Desktop, `orbctl start` for
+  OrbStack; a runner's too, before anything is sent) and waits up to
+  `preflight.docker_start_timeout` (default 2m) for it to answer before
+  failing the job as `docker_down`. The attempt is a step of its own in the
+  job's log and is never queued; a failed one is named in `reason_detail`.
+  `preflight.start_docker: false` turns it off.
+- `skram runner check` and `skram doctor` now fail (exit 1) when a machine is
+  below `preflight.min_free_disk`, or its Docker engine is down or below
+  `preflight.docker_min_free`, as a job sent there would. `doctor` shows this
+  machine's Docker engine whenever a `docker` program is on `PATH`; it is a
+  problem only when a project here uses Docker.
+- `skram runner check` also looks for the `tools:` of every project whose
+  default runner it is; `--tools` still replaces the list.
+- On a target in a project's `ledger:`, a job that fails because the machine
+  was unfit (`disk_full`, `docker_down`, `missing_tool`, `setup_failed`,
+  `start_failed`) is no longer recorded as a red: the key's streak and flakes
+  stay as they were, so `--need-greens` keeps its count and a sound branch is
+  never marked flaky by a full disk. `skram explain`'s `ledger` section says
+  nothing was recorded. Fix the machine, then run the same line again.
+- A failed job's `reason` and `reason_detail` are more precise, and may differ
+  from before for the same output. Rules now match whole words or a line's
+  start, so a log that only mentions "expected", "lint" or "tsc" is no longer
+  a test, lint or compile failure. `reason_detail` is the line that matched
+  (for a red test suite, the test runner's summary line: Playwright, Jest,
+  Vitest, pytest, or Go's package `FAIL` line) instead of whatever the log
+  printed last. A full disk mid-job (`no space left on device`) is
+  `disk_full`, and a Docker engine that stopped answering is the new
+  `docker_down`; both win over anything printed after them, and `skram
+  explain` says how to recover. A missing command or module is `script_error`.
+  The reasons `timeout`, `user_cancel`, `code_bug`, `cve` and `act`, which
+  nothing ever set, are gone. The list of reasons is in the MCP docs under
+  `explain`.
+- A job that ends before its target runs (its process cannot start, the config
+  no longer loads, the checkout or backend file is gone, or the target's tool
+  is not on `PATH`) now fails with the reason `start_failed` and the error as
+  its detail, its log ends like any job's, and `skram explain` names the cause
+  and suggests `skram doctor`. Such jobs used to show no reason.
+- A job's estimate prefers the history of the machine it runs on. A job sent
+  to a runner uses that runner's past runs when it has any (a job run here,
+  the local ones), and all runs otherwise, so a slow runner's job no longer
+  reads as overdue and `wait --timeout auto` gives it enough time. `skram
+  estimate --runner NAME` asks for a runner and says whose runs it used.
+- The MCP `wait` tool now defaults to and is capped at 25 minutes (was 30
+  minutes, max an hour), so it returns before an MCP client gives up on a
+  silent tool. A job still going comes back as `status: timeout` with
+  `still_running`, `phase` and `elapsed_seconds`: call `wait` again with the
+  same ref. A client that sends a progress token gets a progress notification
+  every 30 seconds. `skram wait` is unchanged.
+- `skram runner add` and `skram init --detect` now exit 1 when nothing was
+  written because there was no terminal and no `--yes`. The proposal still
+  prints, and "Nothing written" goes to stderr. `--dry-run`, `--json`, and
+  answering `n` at the prompt still exit 0.
+- In `skram tui`, the Jobs and Queue tabs show where a job runs in a column of
+  its own (`local` when it runs here) instead of an `@name` after the job, and
+  their columns stay aligned with colour on and long or wide names.
+- When a runner job dies and its leftover process groups are killed, `skram
+  explain` on the queue machine names them.
+
+### Fixed
+
+- A job on a runner whose process died without finishing (killed with SIGKILL,
+  out of memory, a crash) left its target's processes running there, working
+  on a resource the next job was already using. The runner now kills them when
+  it finds the job dead.
+- Removing the directory a `skram run` started from (a worktree, say) no
+  longer makes every later job fail at once with an empty log. The queue's
+  background worker and its jobs now start in Skram's queue directory; a job
+  still fails as `checkout_removed` when its own checkout is gone.
+- Uncommitted changes inside a git submodule, or a submodule Skram cannot
+  read, now count as a dirty checkout for a `ledger:` target, so that run is
+  no longer skipped as already green and its green is not recorded.
+- A workflow's project setup runs before the project's first step that needs
+  it, even when its first step is an ephemeral target.
+- `runner check` and `doctor` now report git, the login `PATH` and every tool
+  on a runner running an older Skram, instead of "not probed".
+- A script arm such as `help|--help|-h)` now gives a `help` target; before,
+  the whole arm was ignored because of its flag alternatives.
+- `skram tui` in a short terminal keeps the tab bar, the running jobs and the
+  footer; history rows go first, then the log pane, and below 3 rows it shows
+  a one-line notice.
+
+### Docs
+
+- A workflow job does not pack artifacts or run the `tools:` and Docker engine
+  checks; the config page says so.
+
 ## [0.22.1] — 2026-11-20
 
 - **New:** install with Homebrew on macOS: `brew trust skramstudios/tap`, then

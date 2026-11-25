@@ -21,34 +21,38 @@ skram discover                  # every project, target, and typical duration
   backends, resources, ephemeral targets, guard allow lists, workflows, the
   reaper's budgets, and the repo entries that say what is true inside a
   checkout.
-- [How it works](how-it-works.md) — what a job is on disk, the queue file and the lock in
-  front of it, the processor that starts on demand and exits when idle, how
-  an item that names more than one resource is scheduled, a hold against a
-  drain against a kill, what an ephemeral target is and what `--now` really
-  does, what `--on-error stop` cancels and what it leaves alone, and how an
-  estimate falls back from a flag combination to the target to the project.
-- [Agent setup](agent-setup.md) — registering Skram's MCP server for an agent, what
-  `skram agent install-rules` writes into a checkout and why none of it is
-  committed, the guard hook and which command lines it stops, how the actor
+- [How it works](how-it-works.md) — what a job is on disk, the queue file and
+  the lock in front of it, the processor that starts on demand and exits when
+  idle, how an item that names more than one resource is scheduled, a hold
+  against a drain against a kill, what an ephemeral target is and what `--now`
+  really does, what `--on-error stop` cancels and what it leaves alone, and
+  how an estimate falls back from a flag combination to the target to the
+  project.
+- [Agent setup](agent-setup.md) — registering Skram's MCP server for an agent,
+  what `skram agent install-rules` writes into a checkout and why none of it
+  is committed, the guard hook and which command lines it stops, how the actor
   on each item is detected and overridden, and the exit codes an agent should
   branch on.
 - [MCP](mcp.md) — the tools `skram mcp` serves, the JSON each one takes and
   returns, and the resources it exposes.
 - [Runners](runners.md) — sending a job to another machine over SSH with
-  `--runner`: [setting up a machine as a runner](runners.md#setting-up-a-machine-as-a-runner)
-  and checking it with `skram runner check`, declaring one with `skram runner
-  add`, [what is not true about runners](runners.md#what-is-not-true-about-runners),
-  what travels and what stays, where the runner keeps things,
-  [splitting a suite across runners](runners.md#splitting-a-suite-across-runners),
-  and the SSH program every call goes through.
+  `--runner`: [setting up a machine as a
+  runner](runners.md#setting-up-a-machine-as-a-runner) and checking it with
+  `skram runner check`, declaring one with `skram runner add`, [what is not
+  true about runners](runners.md#what-is-not-true-about-runners), what travels
+  and what stays, where the runner keeps things, [splitting a suite across
+  runners](runners.md#splitting-a-suite-across-runners), and the SSH program
+  every call goes through.
 - [herdr](herdr.md) — the sidebar row the processor keeps, the plugin actions, and
   the key bindings for them.
 - [Notifications](notifications.md) — the one-time macOS setup that makes job-end
   notifications appear, and how to turn them off.
-- [Troubleshooting](troubleshooting.md) — an item that never starts (is the queue held, and who
-  held it), a processor that died and where its log is, a quarantined binary,
-  silent notifications, [runner jobs](troubleshooting.md#runner-jobs) (keychain errors over SSH, a sleeping runner, submodules), how to read what `skram doctor` prints, and every
-  `SKRAM_*` variable in one table.
+- [Troubleshooting](troubleshooting.md) — an item that never starts (is the
+  queue held, and who held it), a processor that died and where its log is, a
+  quarantined binary, silent notifications, [runner
+  jobs](troubleshooting.md#runner-jobs) (keychain errors over SSH, a sleeping
+  runner), how to read what `skram doctor` prints, and every `SKRAM_*`
+  variable in one table.
 - [Questions](faq.md) — why this rather than a single-terminal job queue or a lock
   file, whether it works alongside worktrees, whether the source is available,
   and what it sends anywhere (nothing).

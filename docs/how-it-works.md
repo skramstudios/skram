@@ -17,10 +17,12 @@ exits with.
 - [Which project a bare `skram run` means](#which-project-a-bare-skram-run-means)
 - [Running in another checkout: `-C`](#running-in-another-checkout--c)
 - [Per-job variables: `--env`](#per-job-variables---env)
-- [Lanes, and the rule for an item with two resources](#lanes-and-the-rule-for-an-item-with-two-resources)
+- [Lanes, and the rule for an item with two
+  resources](#lanes-and-the-rule-for-an-item-with-two-resources)
 - [Hold, drain, kill, cancel](#hold-drain-kill-cancel)
 - [Ephemeral targets and `--now`](#ephemeral-targets-and---now)
-- [Skipping a proof that already passed: `ledger:`](#skipping-a-proof-that-already-passed-ledger)
+- [Skipping a proof that already passed:
+  `ledger:`](#skipping-a-proof-that-already-passed-ledger)
 - [When a job fails: `--on-error`](#when-a-job-fails---on-error)
 - [Estimates](#estimates)
 - [Attaching, waiting, and exit codes](#attaching-waiting-and-exit-codes)
@@ -48,6 +50,8 @@ Every job gets a directory named after its job id, under the logs directory
   status.json    the job's record: command, project, target, actor, PID,
                  checkout, when it was queued (queued_at), started, and
                  ended, exit code, duration, failure reason
+  artifacts.tar.gz   the files the project's artifacts: globs matched when
+                 the job ended, when it has any (see config.md)
 ```
 
 The job id is the date and time the job started plus a random suffix, so a
@@ -59,7 +63,7 @@ the queue or already in its history. Secrets are redacted on the way into
 `raw.log` and `events.jsonl`.
 
 Those three files are the only place job output lives, and everything else
-reads them:
+reads them (the artifacts archive is for you to unpack, `tar -xzf`):
 
 ```bash
 skram logs J20260921_194852_f1fca4     # raw.log for one job
@@ -69,9 +73,9 @@ skram status                           # running and recent jobs, from status.js
 skram explain <item-or-job>            # status, reason, stderr tail, what to run next
 ```
 
-Nothing cleans them up on its own. `skram prune` removes old job directories;
-a running job, a job the live queue still refers to, and a directory with no
-readable `status.json` are always kept.
+Nothing cleans them up on its own. `skram prune` removes old job directories,
+artifacts archive included; a running job, a job the live queue still refers
+to, and a directory with no readable `status.json` are always kept.
 
 ## The queue file
 
@@ -90,9 +94,11 @@ The queue is one JSON file and a lock beside it:
 the PID of the processor, and the items. Each item carries its id (`q_…`), the
 project and target, the **actor** who enqueued it (a person, or an agent such
 as `claude-code`), the lanes it occupies, its status, and once it has run, the
-job id, the exit code, and the duration. The actor is stamped at enqueue time
-and passed down to the job, so `status.json` names whoever asked for the work
-rather than the processor.
+job id, the exit code, and the duration. A running item also carries its
+`phase`, what its job is doing now (`running` here; a job sent to a runner
+passes through more, see [runners](runners.md)). The actor is stamped at
+enqueue time and passed down to the job, so `status.json` names whoever asked
+for the work rather than the processor.
 
 ```bash
 skram queue list            # one line per item: its id, its job id once started, the actor
@@ -372,9 +378,10 @@ A job sent to a runner is not in the resource's lane here: it waits in that
 runner's own lane, `<resource>@<runner>` (`cluster@studio`), so a local job
 and a sent job on one resource run at once, and two jobs sent to one runner
 take turns. `--resource cluster@studio` addresses that lane. On the machine
-that has the resource, a lease keeps its own jobs and the jobs sent to it
-from overlapping; a local item waits while a job sent from another machine
-holds the lease. See [Sharing a resource with the runner](runners.md#sharing-a-resource-with-the-runner).
+that has the resource, a lease keeps its own jobs and the jobs sent to it from
+overlapping; a local item waits while a job sent from another machine holds
+the lease. See [Sharing a resource with the
+runner](runners.md#sharing-a-resource-with-the-runner).
 
 ## Hold, drain, kill, cancel
 
@@ -489,9 +496,16 @@ order are another key too, which costs at most one extra run, never a wrong
 skip.
 
 A job is recorded green when it exits 0 and every tree was clean when it
-started: no uncommitted change and no untracked file that is not ignored. A
+started: no uncommitted change and no untracked file that is not ignored, in
+the checkout or inside any git submodule initialised in it. A
 job whose script fails on clean trees is recorded red; a killed or cancelled
-job, or one whose runner was lost, is neither. A run whose trees are not
+job, or one whose runner was lost, is neither. So is a job that failed with an
+environment reason (`disk_full`, `docker_down`, `missing_tool`,
+`setup_failed`, `start_failed`), whether Skram found it before the target
+started or the classifier read it in the job's output: the machine was unfit,
+not the branch, so the key's streak and flakes stay as they were and `skram
+explain`'s `ledger` section says nothing was recorded. Fix the machine, then
+send the same line again. A run whose trees are not
 clean says so on stderr when it is queued, and is never skipped. A job sent
 to a [runner](runners.md) is recorded here, on the machine that holds the
 queue, like a local one, so a green on either machine skips the other's
@@ -610,11 +624,11 @@ running in `cluster` and three items behind it:
 | `other-app/test` | cluster | cancelled — shares `cluster` |
 | `docker-app/test` | docker | runs — shares no lane with the failure |
 
-`continue` is two-way: set it on a still-pending item — the deploy queued behind a
-deliberately red run — and that item is indifferent to a `stop` failure ahead of it
-in its lane too, so it is not cancelled. A pending item with no `--on-error` of its
-own, and one enqueued outside any project, still follow the queue default and are
-cancelled as above.
+`continue` is two-way: set it on a still-pending item — the deploy queued
+behind a deliberately red run — and that item is indifferent to a `stop`
+failure ahead of it in its lane too, so it is not cancelled. A pending item
+with no `--on-error` of its own, and one enqueued outside any project, still
+follow the queue default and are cancelled as above.
 
 A cancelled item records what cancelled it, so `skram queue list`, `skram wait`,
 and `skram explain` all say "after failure of q_…" rather than leaving you to
@@ -641,12 +655,31 @@ skram estimate my-app deploy             # a target that has never run
 
 ```text
 key: [docker-app, build, api, --scope]
-estimate: ~2s  (from 2 runs · target; matched [docker-app, build]; last run 11s ago)
+estimate: ~2s  (from 2 runs · target; matched [docker-app, build]; local samples; last run 11s ago)
 ```
 
 So a flag combination you have never used inherits the target's history, and a
 brand new target inherits the project's. `skram estimate` always prints which
 key it matched, so you can see how specific the answer is.
+
+Each sample also records the [runner](runners.md) its job was sent to. The
+runner is not part of the key, but at each level a lookup prefers the machine
+the job will run on: a job sent to a runner uses that runner's samples when
+there is at least one, a job that runs here uses the local samples the same
+way, and either takes all samples when its own machine has none. So a cold
+runner that takes an hour is not judged by a warm machine's 28 minutes once it
+has run the target, and a runner that never has still gets a number. A flag
+combination new to a runner inherits that runner's history for the target.
+
+```bash
+skram estimate my-app build --runner studio   # a job sent to runner studio
+skram estimate my-app build --runner local    # a job run here
+```
+
+With no `--runner`, `estimate` asks about the machine `skram run` would use:
+the project's `runner:`, else this one. The text names the samples used (`runner
+studio's samples`, `local samples`, or `all samples`), and `--json` carries
+`runner` and `estimate_samples_from` (`runner`, `local`, or `all`).
 
 Like `skram run`, `estimate` takes the project from the current directory (or
 `--context`) when you leave it out, and `--json` prints the whole answer — key,
@@ -670,9 +703,10 @@ runs that count are used:
   in another checkout, or giving it its own variables does not fragment its
   history.
 
-The same estimate appears at enqueue, as the remaining time in `skram status`,
-as the queue and lane ETAs, and as the deadline behind `skram wait --timeout
-auto`.
+The same estimate, for the job's own runner, appears at enqueue, as the
+remaining time in `skram status` and the `skram logs -F` header, as the queue
+and lane ETAs, in the TUI and the dashboard, and as the deadline behind `skram
+wait --timeout auto`.
 
 ## Attaching, waiting, and exit codes
 
@@ -757,13 +791,13 @@ skram metrics up --addr :9112   # the host exporter on another port
 skram metrics up --exporter-only  # the exporter alone, on a runner another machine's Prometheus scrapes
 ```
 
-The exporter is a Skram process on this machine, not a container. `metrics
-up` starts it detached, records its PID and
-address in `exporter-state.json` in the data directory, sends its output to
-`exporter.log` beside it, and waits until it answers `/health`; running `up`
-again replaces it. It reads the logs directory straight off the disk and
-serves `/metrics` and `/health` on port 2112 of every interface (`--addr`
-changes that), so another machine's Prometheus can reach it.
+The exporter is a Skram process on this machine, not a container. `metrics up`
+starts it detached, records its PID and address in `exporter-state.json` in
+the data directory, sends its output to `exporter.log` beside it, and waits
+until it answers `/health`; running `up` again replaces it. It reads the logs
+directory straight off the disk and serves `/metrics` and `/health` on port
+2112 of every interface (`--addr` changes that), so another machine's
+Prometheus can reach it.
 
 It reads the job dirs, `queue.json`, and the lease files and serves:
 
@@ -824,30 +858,29 @@ there is no monitoring stack on this machine. That is the normal state of a
 runner, where `skram metrics up --exporter-only` starts the exporter alone,
 with no compose file and no scrape targets.
 
-To use it, write that compose file yourself. Skram runs `docker compose` on
-it with two directories passed in: the logs directory as `SKRAM_LOGS_DIR`, so
-the services can mount the job records read-only, and the scrape targets
-directory as `SKRAM_METRICS_TARGETS_DIR`
-(`~/.local/share/skram/metrics/targets`). Before it runs compose, `metrics
-up` writes `skram.json` there, a Prometheus
+To use it, write that compose file yourself. Skram runs `docker compose` on it
+with two directories passed in: the logs directory as `SKRAM_LOGS_DIR`, so the
+services can mount the job records read-only, and the scrape targets directory
+as `SKRAM_METRICS_TARGETS_DIR` (`~/.local/share/skram/metrics/targets`).
+Before it runs compose, `metrics up` writes `skram.json` there, a Prometheus
 [file_sd](https://prometheus.io/docs/guides/file-sd/) list: this machine's
 exporter as `host.docker.internal:2112`, then each entry under `runners:` at
-port 2112 of its `ssh:` host's address (below), each with a
-`machine` label (this machine's host name, or the runner's name). Mount that
-directory into Prometheus and point a `file_sd_configs` job at it; on Linux
-the Prometheus service needs `extra_hosts: ["host.docker.internal:host-gateway"]`
-to reach the host. A runner's address is resolved on this machine, since the
-container sees neither your SSH config nor this machine's resolver (a
-Tailscale or `.local` name, say): its `ssh:` host goes through `ssh -G`, so an
-alias in `~/.ssh/config` becomes the host it names, and that host is looked up
-here and written as its IPv4 address (else its first address, else the name
-itself). Run `metrics up` again if that address changes. A runner is scraped
-only when its own exporter is running, so run `skram metrics up
---exporter-only` there too. If compose fails, `up` stops the exporter again, so
-the stack is up whole or not at all. Everything else about the stack is yours
-to decide. The URLs `metrics up` prints afterwards assume Grafana on 3333,
-Prometheus on 9090, and Loki on 3100, so those are the ports to publish if
-you want the printed links to work.
+port 2112 of its `ssh:` host's address (below), each with a `machine` label
+(this machine's host name, or the runner's name). Mount that directory into
+Prometheus and point a `file_sd_configs` job at it; on Linux the Prometheus
+service needs `extra_hosts: ["host.docker.internal:host-gateway"]` to reach
+the host. A runner's address is resolved on this machine, since the container
+sees neither your SSH config nor this machine's resolver (a Tailscale or
+`.local` name, say): its `ssh:` host goes through `ssh -G`, so an alias in
+`~/.ssh/config` becomes the host it names, and that host is looked up here and
+written as its IPv4 address (else its first address, else the name itself).
+Run `metrics up` again if that address changes. A runner is scraped only when
+its own exporter is running, so run `skram metrics up --exporter-only` there
+too. If compose fails, `up` stops the exporter again, so the stack is up whole
+or not at all. Everything else about the stack is yours to decide. The URLs
+`metrics up` prints afterwards assume Grafana on 3333, Prometheus on 9090, and
+Loki on 3100, so those are the ports to publish if you want the printed links
+to work.
 
 Nothing else in Skram depends on any of this. The job records the stack would
 read are the same ones `skram status`, `skram logs`, and `skram explain`
@@ -858,7 +891,7 @@ already read straight off the disk.
 Elsewhere: the docs [index](README.md) lists every page, and the
 [README](../README.md) has the install steps and the first loop. Every
 configuration key — `resource:` and `ephemeral:` above, and the two
-directories — has its entry in the [configuration reference](config.md), and an item that
-never starts is the first subject of [troubleshooting](troubleshooting.md).
-The same behaviour reached by an agent is on the [agent setup](agent-setup.md)
-and [MCP](mcp.md) pages.
+directories — has its entry in the [configuration reference](config.md), and
+an item that never starts is the first subject of
+[troubleshooting](troubleshooting.md). The same behaviour reached by an agent
+is on the [agent setup](agent-setup.md) and [MCP](mcp.md) pages.

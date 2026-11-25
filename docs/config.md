@@ -4,14 +4,15 @@ Skram reads one YAML file. This page lists every key it accepts, the default
 it uses when the key is absent, and what changes when you set it.
 
 The file is shared with the rest of the family: Skram reads `projects:`,
-`workflows:`, `reaper:`, `repos:`, `logs_dir:`, and `queue_dir:`, and ignores
-every other top-level block except the removed ones at the end of this page.
-Only `projects:` is required.
+`workflows:`, `reaper:`, `preflight:`, `repos:`, `logs_dir:`, and
+`queue_dir:`, and ignores every other top-level block except the removed ones
+at the end of this page. Only `projects:` is required.
 
 - [Where the file is](#where-the-file-is)
 - [`projects:`](#projects)
 - [`workflows:`](#workflows)
 - [`reaper:`](#reaper)
+- [`preflight:`](#preflight)
 - [`repos:`](#repos)
 - [`logs_dir:` and `queue_dir:`](#logs_dir-and-queue_dir)
 - [Blocks another product owns](#blocks-another-product-owns)
@@ -28,6 +29,11 @@ skram init                      # write a starter file at the default path
 skram init --detect             # add the checkout you are in as a project
 skram --config ./other.yaml status
 ```
+
+`init --detect` prints the project it would add, then asks `[Y/n]` in a
+terminal. Anywhere else it writes only with `--yes`; without one it writes
+nothing and exits 1 with "Nothing written" on stderr. `--dry-run` and `--json`
+write nothing and exit 0, and answering `n` exits 0.
 
 `--config` works on every command. The queue processor is started with the
 absolute path of the file the item was enqueued from, and that path is passed
@@ -81,7 +87,7 @@ so discovery works in a shell hook and on a machine that does not have `make`,
 
 | Key | Targets come from | A target runs as |
 | --- | --- | --- |
-| `script:` | the arms of a column-0 `case … in` block, one-line (`deploy) ./do-deploy.sh ;;`) or multi-line, quoted or bare, `a\|b)` alternatives each their own target; a trailing `# comment` on the arm (after `;;` for a one-line arm) is the help text | `bash <file> <target> [args]` |
+| `script:` | the arms of a column-0 `case … in` block, one-line (`deploy) ./do-deploy.sh ;;`) or multi-line, quoted or bare, `a\|b)` alternatives each their own target (a flag alternative such as `-h` is ignored, so `help\|--help\|-h)` is `help`); a trailing `# comment` on the arm (after `;;` for a one-line arm) is the help text | `bash <file> <target> [args]` |
 | `makefile:` | every name in a `.PHONY:` line and every `target: ## help` rule; with neither, every plain-name rule | `make -f <file> <target> [args]` |
 | `taskfile:` | the top-level `tasks:` keys, minus `internal: true`; `desc:` is the help | `task --taskfile <file> <target> [-- args]` |
 | `justfile:` | column-0 recipes, minus `[private]` and `_`-prefixed names; the comment run above is the help | `just --justfile <file> <target> [args]` |
@@ -167,6 +173,38 @@ build, or a cluster bring-up must run every time it is asked for, so it never
 belongs here. An ephemeral target on the list is ignored: it has no job to
 record.
 
+### `setup:`
+
+The target that installs what a cold checkout needs, run first in every
+checkout Skram set up.
+
+```yaml
+projects:
+  my-app:
+    path: ~/dev/my-app
+    makefile: Makefile
+    setup: install
+```
+
+Default: none. A job sent to a [runner](runners.md), and a local job in a
+checkout other than `path:` (a worktree or another clone), runs the setup
+target first, as its own step with its own `step_start` and `step_end`
+events, then its target. It runs in the same checkout, with the same
+environment (`env:`, inputs, and the run's `--env`), inside the job's lane,
+lease, and duration. A job in `path:` skips it, so everyday jobs cost what
+they cost without it. A job of the setup target itself runs it once, and an
+ephemeral target runs none. A workflow job runs a project's setup once,
+before that project's first step.
+
+When the setup target exits non-zero the job ends there, with the reason
+`setup_failed` and the setup's exit code, and its target never starts;
+`skram explain` names the setup target and its output. Skram does not cache
+or skip it, so keep the target cheap when nothing changed (a lockfile check
+before an install, for one). `skram discover --json` shows it as `setup`.
+
+A name that is not a target in the project's file, or that is listed in
+`ephemeral:`, fails the config load, naming the project and the target.
+
 ### `expose:`
 
 The targets this project offers.
@@ -243,13 +281,13 @@ machine may have it: `skram doctor` reports it, one line per project.
 directory; `skram discover --json` carries them as `inputs`, keyed by
 variable, each with `repo`, `default`, and `error` when there is no default.
 
-A job follows each input the way it follows the project's own checkout: to
-the checkout of that repo you stand in, to one you name with `-C <dir>`
+A job follows each input the way it follows the project's own checkout: to the
+checkout of that repo you stand in, to one you name with `-C <dir>`
 (repeatable, one per repo, and it beats the directory you stand in), and
-otherwise to the default. So from a worktree of `my-lib`,
-`skram run my-app build` builds that worktree, and
-`skram run my-app test -C ../my-lib--x -C ../my-e2e--x` binds both inputs
-from anywhere. See [running in another checkout](how-it-works.md#running-in-another-checkout--c).
+otherwise to the default. So from a worktree of `my-lib`, `skram run my-app
+build` builds that worktree, and `skram run my-app test -C ../my-lib--x -C
+../my-e2e--x` binds both inputs from anywhere. See [running in another
+checkout](how-it-works.md#running-in-another-checkout--c).
 
 `skram discover` follows inputs the same way: run from a checkout of one, or
 with `-C`, it prints the same `input VAR → dir (default …)` line `run`
@@ -300,9 +338,9 @@ no inputs:
 Where each input resolved is fixed when the job is queued: editing `paths:`
 while it waits does not move it. What is in that directory is read when the
 job starts, so a commit or checkout in an input's directory while the job
-waits changes what it builds. When `head_at_start` differs from `head` the job still runs, and
-its log gets one warning line per moved input, also written as a `warn`
-event tagged `input_drift`:
+waits changes what it builds. When `head_at_start` differs from `head` the job
+still runs, and its log gets one warning line per moved input, also written as
+a `warn` event tagged `input_drift`:
 
 ```text
 [skram] WARNING: input LIB_DIR HEAD moved between enqueue and start: a1b2… → c3d4… (/home/me/dev/my-lib--x); the job runs what is there now
@@ -342,6 +380,80 @@ when a run names none: a key of the top-level [`runners:`](#runners) block.
 Empty (the default) runs jobs on this machine, and `--runner local` runs one
 here whatever the project says. A name that is not in `runners:` is a config
 error. An ephemeral target always runs here.
+
+### `tools:`
+
+```yaml
+projects:
+  api:
+    path: ~/src/api
+    makefile: Makefile
+    tools: [docker, pnpm]
+```
+
+The commands this project's targets need, as bare command names (`pnpm`, not
+a path); a path or a shell word is a config error naming the project and the
+entry. Empty by default. Unlike a runner's own [`tools:`](#runners), which
+only warns, these are a requirement.
+
+Before a job of the project starts, Skram looks each one up on the `PATH` the
+job will have, on the machine it starts on: this machine's (the queue's own
+`PATH`, or the one the project's `env:` or a run's `--env` sets), or a
+runner's login-shell `PATH`, asked in the same hello that checks the runner
+before anything is sent. A missing tool fails the job at once with reason
+`missing_tool`, the detail naming the tool and the machine; on a runner
+nothing has been sent yet. It is an ordinary failed job, with a job
+directory, events, exit code 1, and its `--on-error` applies. An ephemeral
+target runs as always, unchecked.
+
+Naming `docker` also turns on the [Docker engine checks](#the-docker-engine):
+the engine must answer and have room before the job starts. `skram discover
+--json` lists the names as the project's `tools`, and `skram runner check`
+looks for them on the runner the project defaults to.
+
+These checks apply to a `skram run <project> <target>` job. A
+[workflow](#workflows) job is checked only against the host disk floor, not
+for its steps' projects' `tools:` or Docker engine.
+
+### `artifacts:` and `artifacts_limit:`
+
+```yaml
+projects:
+  web:
+    path: ~/src/web
+    script: ops.sh
+    artifacts: [test-results, playwright-report, 'logs/*.log']
+    artifacts_limit: 200MB
+```
+
+Files a job makes that you want to keep: test traces, reports, logs. When a
+job ends, whatever its status, the files these globs match are packed into
+one archive, `artifacts.tar.gz`, at the top of its [job
+directory](how-it-works.md#a-job-on-disk), each at its path relative to the
+project's directory. A job stopped by `skram kill` or another signal is
+packed too.
+
+Each entry is a glob relative to the project's directory in the checkout the
+job ran in: the directory its script or Makefile runs in (`*`, `?`, and `[…]`,
+one path segment each). A match that is a directory brings every file under
+it. Symlinks are never followed, and a match that resolves outside that
+directory is left out. Member names in the archive are relative to it too. No
+match writes no archive.
+
+`artifacts_limit` caps the archive (default `500MB`; units `KB`, `MB`, `GB`,
+`TB` are binary, so `1MB` is 1048576 bytes, and a bare number is bytes).
+Files are added in match order until the next one would pass it; the rest
+are left out, and one warning in the job's log names how many files and
+bytes and which ones. A job sent to a [runner](runners.md) is packed there
+and its archive comes home with the rest of the job directory.
+
+`wait --json` and `explain --json` name the archive as `artifacts`, `status
+--json` names the most recent job's as `most_recent_artifacts`, and `explain`
+prints it on an `Artifacts:` line; each leaves it out when there is none.
+`skram prune` removes it with its job directory.
+
+`artifacts:` applies to a `skram run <project> <target>` job. A
+[workflow](#workflows) job does not pack its steps' projects' artifacts.
 
 ### `e2e:`
 
@@ -532,15 +644,20 @@ the first failing step's.
 
 ## `reaper:`
 
-Repeated image builds fill the Docker disk. The reaper removes old timestamped
-image tags and prunes build caches to a budget. It touches the Docker daemon
-on this machine only: no registry, no cluster runtime, no volume.
+Repeated image builds fill the Docker disk. The reaper removes old image tags
+(timestamp tags unless you say otherwise) and prunes build caches to a budget.
+It touches the Docker daemon on this machine only: no registry, no cluster
+runtime, no volume.
 
 ```yaml
 reaper:
   enabled: true
   keep_tags: 2
-  tag_pattern: '^\d{8}-\d{6}$'
+  tag_patterns:
+    - '^\d{8}-\d{6}$'
+    - '^(s\d+|sweep|local)-'
+  keep:
+    - 'localhost:6001/*:release-*'
   cache_budget: 20GB
   image_repos:
     - 'localhost:6001/*'
@@ -553,14 +670,28 @@ reaper:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `enabled:` | `false` | turns on the automatic reap after a job. It does not gate the command: `skram reap` runs either way |
-| `keep_tags:` | `2` | how many matching tags to keep per image repository, newest first |
-| `tag_pattern:` | `^\d{8}-\d{6}$` | the regular expression a tag must match to be eligible. The default matches timestamp tags such as `20260921-143005`, so `latest` and version tags never match and are never removed |
-| `image_repos:` | empty | glob patterns for the image repositories to look at. Nothing is reaped until this is set |
+| `enabled:` | `false` | turns on the automatic reaps: after a job matching `after_targets:`, and once before a job fails its [preflight](#preflight) on disk. It does not gate the command: `skram reap` runs either way |
+| `keep_tags:` | `2` | how many tags to keep per tag pattern in each image repository, newest first by the image's creation time (not the tag text) |
+| `tag_patterns:` | `['^\d{8}-\d{6}$']` | a list of regular expressions; a tag that matches one is eligible, and each pattern keeps its own newest `keep_tags:` (see below the table). The default matches timestamp tags such as `20260921-143005`, so `latest` and version tags are never removed |
+| `tag_pattern:` | unset | the older single-pattern key, read as a one-item `tag_patterns:`. Setting both keys is a config error |
+| `keep:` | empty | `repository:tag` glob patterns (for example `localhost:6001/*:release-*`) that are never removed, whatever group they fall in. A kept image does not use up a `keep_tags:` slot |
+| `image_repos:` | empty | glob patterns for the image repositories to look at, matched against the repository name as `docker image ls` prints it; `*` never crosses a `/`, so `localhost:6001/*` does not match a local-only `skram-e2e-app`, which needs its own `skram-e2e-*`. Nothing is reaped until this is set |
 | `cache_budget:` | `20GB` | the build cache each builder is pruned down to |
 | `builders:` | empty | extra buildx builders to prune besides the default one, which is always pruned. A builder that is not present is skipped |
 | `after_targets:` | empty | `project/target` glob patterns. After a job whose project and target match one, and only when it succeeded, a reap runs inside that job |
 | `timeout:` | `5m` | the budget an automatic reap runs its whole pass under, and the per-call cap on every destructive docker call it makes (`rmi`, and the image/builder/buildx prunes — a big removal or a cache prune down to budget can legitimately take a while). A read-only call (`image ls`, `buildx inspect`, `system df`) is capped at a shorter, fixed 30s instead, so a wedged Docker daemon is killed rather than left to hang the job's lane. A `system df` past its cap only skips the disk usage report. On any other expiry the reap logs which step timed out and stops there, and the job's own exit code is unchanged |
+
+Within a repository each tag pattern is its own group and keeps its own
+newest `keep_tags:`, so timestamp tags and a second scheme such as `s5-…` or
+`local-…` never push each other out. A tag matching several patterns belongs
+to the first.
+
+The older single-pattern form still works in place of `tag_patterns:`:
+
+```yaml
+reaper:
+  tag_pattern: '^\d{8}-\d{6}$'
+```
 
 ```bash
 skram reap --dry-run            # list what would be removed
@@ -568,16 +699,149 @@ skram reap --dry-run            # list what would be removed
 
 An automatic reap writes its output into the job's log and never fails the
 job. Removing a tag that is in use is logged and skipped. A structural problem
-— an unparseable `tag_pattern:`, a Docker daemon that cannot be reached, or no
-`image_repos:` — fails the command, and is a log line when the reap runs after
-a job. One `SKRAM_*` variable skips automatic reaps without editing the file;
-[troubleshooting](troubleshooting.md) lists it.
+— an unparseable `tag_patterns:` entry, a Docker daemon that cannot be
+reached, or no `image_repos:` — fails the command, and is a log line when the
+reap runs after a job. One `SKRAM_*` variable skips automatic reaps without
+editing the file; [troubleshooting](troubleshooting.md) lists it.
+
+When the Docker engine keeps images in the containerd image store, build cache
+is freed only by removing images, so a cache prune to budget can report 0B. The
+reap then logs one line saying so, and runs the prune anyway.
+
+The section also travels with every job sent to a [runner](runners.md), so a
+matching job reaps there, and `skram reap --runner <name>` reaps a runner now
+with this section and the command's flags; see
+[Reaping a runner's Docker](runners.md#reaping-a-runners-docker).
 
 A docker call that hangs past its cap is killed either way — the 30s query
 cap or, for a removal or a prune, `timeout:`. Run by hand, `skram reap`
 reports that expiry as an error and exits non-zero; inside a job it is the
 same "structural problem" case above, so it stops the reap and the automatic
 pass logs one line naming the step, without failing the job.
+
+## `preflight:`
+
+Before a job starts, Skram checks the machine it will start on. A disk that
+is about to fill fails the job at once, instead of partway through as
+something that looks like a test failure.
+
+```yaml
+preflight:
+  min_free_disk: 5GB
+  docker_min_free: 10GB
+  start_docker: true
+  docker_start_timeout: 2m
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `min_free_disk:` | `5GB` | the least free space allowed on the volume holding Skram's data directory (`~/.local/share/skram`, or under `$XDG_DATA_HOME`). Written like `cache_budget:`: `5GB`, `512MB`, `1.5TB`, or a bare number of bytes; units are binary (1GB is 1024³ bytes). `0` turns the check off |
+| `docker_min_free:` | `10GB` | for a project whose [`tools:`](#tools) names `docker`: the least free space allowed inside the Docker engine's own storage, written like `min_free_disk:`. `0` turns this floor off; the engine must still answer |
+| `start_docker:` | `true` | for a project whose `tools:` names `docker`: when the engine does not answer, start it once before failing the job (see [Starting a stopped engine](#starting-a-stopped-engine)). `false` turns that off |
+| `docker_start_timeout:` | `2m` | how long that start and the wait for the engine to answer may take together, a duration such as `90s` or `3m` |
+
+The check is on with no `preflight:` block at all. It runs for every job
+except an [ephemeral target](#ephemeral), on the machine the job starts on:
+
+- **A job on this machine** is checked by the queue processor just before
+  its target would start.
+- **A job sent to a [runner](runners.md)** is checked through the runner's
+  answer to the first call Skram makes before sending anything, against this
+  machine's `min_free_disk:`. A short disk fails the job there, before any
+  commit is pushed. A runner whose Skram is older does not report its free
+  space; that is "not measured", and the job is sent as before. The block
+  is sent to the runner with the job.
+
+Below the floor, the job fails with reason `disk_full`. It is an ordinary
+failed job: it has a job directory and events ending in `job_end`, `skram
+wait` exits `1`, and `--on-error stop` cancels the rest of its lane. Its
+`reason_detail` names the machine, the free space measured and the floor,
+for example `this machine (studio) has 3.2GB free on the volume holding
+/home/you/.local/share/skram, below preflight.min_free_disk 5GB`. The job
+never waits for space to come back: free some (see
+[Running out of disk](troubleshooting.md#running-out-of-disk)) and run it
+again.
+
+### Reaping once before failing
+
+When a floor is short (the host's `min_free_disk:` or the engine's
+`docker_min_free:`) and the [`reaper:`](#reaper) block is on (`enabled:
+true`, with `image_repos:` set), Skram reaps once on the machine the job was
+about to start on, then measures again. It is the same reap `skram reap`
+runs, with the block's `keep_tags:`, `tag_patterns:`, `keep:` and
+`cache_budget:`, under its `timeout:`. On a runner it runs there, with this
+machine's block, before anything is sent.
+
+The reap is part of the job's own check: it is never a queued item, takes no
+lane, and runs at most once per job. Its output is in the job's log as a
+step of its own, named `reap` (events tagged `remedy`). With room after it,
+the job starts as usual and its log begins with that step. Still short, the
+job fails with `disk_full`, and `reason_detail` ends with what was tried,
+for example `…, below preflight.docker_min_free 10GB; a reap was tried first
+and freed 1.2GB`.
+
+A `docker_down` engine is never reaped: the job fails at once. With no
+`reaper:` block, `enabled: false`, no `image_repos:`, or
+`SKRAM_REAP_DISABLE=1` on the machine that runs the queue, nothing is reaped
+and the job fails as soon as the floor is short.
+
+### The Docker engine
+
+A job of a project whose [`tools:`](#tools) names `docker` gets two more
+checks, on the same machine and at the same moment. "Docker" means whatever
+engine the `docker` program's current context reaches there: Docker Desktop,
+OrbStack, or a plain daemon. Skram names the engine and the context in the
+job's `reason_detail`, so on a machine with both Docker Desktop and OrbStack
+you can see which one a job reached. Ephemeral targets and projects without
+`docker` in `tools:` never call `docker` here.
+
+- **The engine answers.** `docker info` must answer within 30 seconds (a fixed
+  limit). An engine that is stopped, starting, or hung fails the job at once
+  with reason `docker_down`; `reason_detail` names the machine, the context,
+  and the engine's own error line, for example `this machine (studio): the
+  Docker engine through context desktop-linux did not answer: Cannot connect
+  to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon
+  running?`. Before failing, Skram tries to [start it
+  once](#starting-a-stopped-engine). A dead engine is never reaped.
+- **The engine's storage has room.** Docker Desktop and OrbStack keep images,
+  containers, volumes and build cache inside a virtual machine's disk, which
+  can fill while the Mac's own disk shows plenty free. Skram reads that disk
+  image's size and how much of it is written (no image is pulled and nothing
+  runs in the engine), capped by the free space of the volume the image sits
+  on. Below `docker_min_free:` the job fails with reason `disk_full`, and
+  `reason_detail` says it is the Docker engine's storage, with the engine,
+  the context, the disk image, the free space and the floor.
+
+Skram measures the engine's storage for Docker Desktop (its disk image at
+the default location or the one set in its settings) and OrbStack (its
+`data.img`), and for a plain daemon on Linux whose data root is on the same
+machine. Any other engine (a remote context, a VM tool Skram does not know,
+a disk image it cannot find) is "not measured": only the answer is checked.
+
+### Starting a stopped engine
+
+When the engine does not answer, Skram starts it once on the machine the job
+was about to start on, then waits for `docker info` to answer, for up to
+`docker_start_timeout:` (default 2m) in all. Docker Desktop (the
+`desktop-linux` context, or any context where the `docker desktop` plugin
+answers) gets `docker desktop start`; OrbStack (the `orbstack` context) gets
+`orbctl start`. Any other engine (a plain daemon, colima, a remote context) is
+not started. A start command that hangs is ended at the timeout.
+
+The attempt is part of the job's own check: it is never queued, nothing waits
+for the engine beyond that one bounded attempt, and its lines are in the
+job's log as a step of its own, named `start-docker` (events tagged
+`remedy`): one when the start is attempted, one when the engine answers or
+the wait runs out. An engine that answers goes on to the rest of the
+preflight (its storage floor, and the [reap](#reaping-once-before-failing))
+and the job starts as usual. One that still does not answer fails the job
+with `docker_down`, and `reason_detail` ends with what was tried, for example
+`…; a start of the Docker engine was tried first (docker desktop start): the
+engine did not answer within 2m0s of docker desktop start`. On a
+[runner](runners.md) the start runs there, with this machine's
+`start_docker:` and `docker_start_timeout:`, before anything is sent; a
+runner whose Skram cannot start an engine fails the job with `docker_down`
+and nothing pushed. `start_docker: false` turns the attempt off.
 
 ## `repos:`
 
@@ -658,6 +922,7 @@ runners:
   studio:
     ssh: me@studio.example.net
     tools: [node, pnpm, docker]
+    prune_after: 168h
 ```
 
 The machines `skram run --runner <name>` may send a job to, by name. `ssh:` is
@@ -669,7 +934,14 @@ is reserved for this machine. What a runner receives and keeps is in
 `PATH`, as bare command names (`node`, not a path). Skram asks the runner
 for them when it checks it (`skram doctor`, and before each job it sends),
 and reports each one missing; a job is still sent when one is missing, with
-a warning in its events, so a stale list never fails a job. Empty by default.
+a warning in its events, so a stale list never fails a job. A project's own
+[`tools:`](#tools) is the list that fails a job. Empty by default.
+
+`prune_after:` is how long that runner keeps a worktree nobody has used and a
+job's files after they came home, as a duration (`72h`, `168h`). Default
+`72h`; `0` keeps everything. Each job sent to the runner removes what is older,
+and a removed worktree's ignored files go with it. See
+[Runner storage](runners.md#runner-storage).
 
 ## `accept_runner_jobs:`
 
@@ -681,8 +953,8 @@ Default `true`. Set on a machine other machines send jobs to (a
 [runner](runners.md)), `false` makes it decline every one: the job fails at
 once with reason `runner_declined` on the machine that sent it. Only the file
 at the default path counts, read by the Skram that runs jobs there, and a
-missing or unreadable file accepts. See
-[Declining runner jobs](runners.md#declining-runner-jobs).
+missing or unreadable file accepts. See [Declining runner
+jobs](runners.md#declining-runner-jobs).
 
 ## Blocks another product owns
 

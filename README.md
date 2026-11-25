@@ -206,14 +206,16 @@ One session per checkout, an agent in each, all deploying to one cluster:
 
 | | | |
 | --- | --- | --- |
-| `skram run --runner <name>` | run a job on another machine over SSH: it waits in its own lane here, your uncommitted work goes with it, its output streams back, and a resource on that machine is still used by one job at a time | [runners](docs/runners.md) |
-| `skram runner list` / `check` / `add` | see the runners you have declared, check a machine is ready to be one (SSH, architecture, `git`, the tools a job needs, sleep) with the fix under each failure, and declare one in your config | [setting up a runner](docs/runners.md#setting-up-a-machine-as-a-runner) |
+| `skram run --runner <name>` | run a job on another machine over SSH: it waits in its own lane here, your uncommitted work and submodules go with it, its output streams back, and a resource on that machine is still used by one job at a time | [runners](docs/runners.md) |
+| `skram runner list` / `check` / `add` | see the runners you have declared and what the last contact found (free disk, Docker engine), check a machine is ready to be one (SSH, architecture, `git`, the tools a job needs, disk, Docker) with the fix under each failure, and declare one in your config | [setting up a runner](docs/runners.md#setting-up-a-machine-as-a-runner) |
 | `skram agent guard` | a Claude Code and Cursor shell hook: it blocks the ops script, a known `make`/`task`/`just` target, and `kubectl` and `docker` mutations, and prints the `skram run` line instead | [installing it](docs/agent-setup.md) |
 | `skram tui` | running jobs and their logs, a launcher, and the queue, in the terminal | [as a popup](docs/herdr.md) |
 | `skram workflow list`, `skram workflow run` | a DAG of targets, defined under `workflows:`, queued as one job that holds every lane its steps need | [the keys](docs/config.md) |
 | `skram estimate` | what a command usually takes, and from which runs | [key fallback](docs/how-it-works.md) |
 | `skram prune` | remove old job directories; running jobs and anything the queue still refers to are kept | [defaults](docs/troubleshooting.md) |
-| `skram reap` | reclaim Docker disk space so repeated image builds cannot fill the daemon's disk | [budgets](docs/config.md) |
+| `skram reap` | reclaim Docker disk space so repeated image builds cannot fill the daemon's disk, here or on a runner (`--runner`) | [budgets](docs/config.md) |
+| `preflight:` | before a job starts, check the machine it starts on for free disk, the project's `tools:`, and a Docker engine that answers; a short disk gets one reap and a stopped engine one start before the job fails | [preflight](docs/config.md#preflight) |
+| `artifacts:` | test traces, reports, and logs a job makes, packed into its job directory when it ends and brought home from a runner | [artifacts](docs/config.md#artifacts-and-artifacts_limit) |
 | `skram dashboard` | a monitoring UI with live log streaming; `skram dashboard status` and `skram dashboard stop` manage it | [details](docs/how-it-works.md) |
 | `skram metrics up` | a Prometheus exporter on this machine, plus a Prometheus, Grafana, Loki, and Vector stack from a compose file you supply that scrapes it and every runner | [what it needs](docs/how-it-works.md) |
 | herdr | the processor keeps the running job in each workspace's sidebar row, and the TUI opens as a popup | [bindings](docs/herdr.md) |

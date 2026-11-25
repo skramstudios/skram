@@ -117,7 +117,9 @@ Output:
 `runners` sits beside `projects`: every runner the config declares, keyed by
 name, with its SSH `destination` and its `tools` (see
 [Runners](runners.md#declaring-a-runner)), and `{}` when there is none. A
-project's own `runner` is the one its jobs go to when a run names none.
+project's own `runner` is the one its jobs go to when a run names none, and
+its `tools` (absent when it declares none) are the commands each of its jobs
+needs on the machine it starts on (see [`tools:`](config.md#tools)).
 
 `backend` is `script`, `make`, `task`, or `just`, and `file` is the file the
 targets were read from. `resources` are the shared resources this project's
@@ -164,6 +166,7 @@ Output, with one job running and one item waiting behind it:
       "estimate_samples": 1,
       "estimate": "~8s remaining (est ~12s · from 1 run · target)",
       "item_id": "q_6a2071c8",
+      "phase": "running",
       "resources": ["docker"]
     }
   ],
@@ -223,6 +226,11 @@ Output, with one job running and one item waiting behind it:
       "probed": true,
       "login_path": "/opt/homebrew/bin:/usr/bin:/bin",
       "missing_tools": ["pnpm"],
+      "host_free_bytes": 128849018880,
+      "docker_answered": true,
+      "docker_engine": "OrbStack",
+      "docker_context": "orbstack",
+      "docker_free_bytes": 33285996544,
       "last_contact_seconds": 154
     },
     "old-box": { "outcome": "never" }
@@ -232,25 +240,46 @@ Output, with one job running and one item waiting behind it:
 
 The top-level `actor` is who is asking. `by_actor` is who is waiting, which is
 the field that answers "is a person blocked behind me". `most_recent` is the
-last item to finish. `lanes` lists one entry per lane with anything live on
-it (its `resource` is the lane's name, `cluster@studio` for jobs sent to a
-runner), and the queue's `eta_seconds` is the longest lane's. A running job
-sent to a runner carries `runner`; `leases` lists the leases held on this
-machine, and `waiting_for_runner` and `waiting_for_lease` the items waiting
-on a runner.
+last item to finish, and `most_recent_artifacts` its job's artifacts archive
+when it has one. `lanes` lists one entry per lane with anything live on it
+(its `resource` is the lane's name, `cluster@studio` for jobs sent to a
+runner), and the queue's `eta_seconds` is the longest lane's. Each running
+job's `phase` is what it is doing now: `running` for a local job, and for one
+sent to a runner `checking` (the runner's hello), `shipping` (pushing a
+commit), `preparing` (resetting the runner's worktree), `running`, then
+`homing` (bringing its files home), so a large push is not mistaken for a
+hang. Either kind is in `setup` while the project's `setup:` target runs;
+`queue list --json` carries the same `phase` on the running item, and the
+job's end clears it. A running job sent to a runner carries `runner`; `leases`
+lists the leases held on this machine, and `waiting_for_runner` and
+`waiting_for_lease` the items waiting on a runner.
 
-`runners` has one entry per declared [runner](runners.md), `{}` when there
-is none. It is what this machine last heard from each, read from a file the
-queue writes after every hello it makes (before a dispatch, while an item
-waits, and in `runner check` and `doctor`), so `status` never contacts a
-runner. `at` is that hello's time and `last_contact_seconds` its age.
-`outcome` is `ok` (it answered), `unreachable` (it gave no answer, or none
-skram could read; `error` says what happened), `declined` (its owner set
-`accept_runner_jobs: false`), or `never` (no hello yet: the entry has nothing
-else). An answer also carries the runner's `os`, `arch`, and Skram `version`
-(absent when it has none yet); `probed` is true when it was asked about its
-tools, and then `login_path`, `missing_tools`, and `missing_git` are what it
-said, as in [Checking a runner](runners.md#checking-a-runner).
+`runners` has one entry per declared [runner](runners.md), `{}` when there is
+none. It is what this machine last heard from each, read from a file the queue
+writes after every hello it makes (before a dispatch, while an item waits, and
+in `runner check` and `doctor`), so `status` never contacts a runner. `at` is
+that hello's time and `last_contact_seconds` its age. `outcome` is `ok` (it
+answered), `unreachable` (it gave no answer, or none skram could read; `error`
+says what happened), `declined` (its owner set `accept_runner_jobs: false`),
+or `never` (no hello yet: the entry has nothing else). An answer also carries
+the runner's `os`, `arch`, and Skram `version` (absent when it has none yet);
+`probed` is true when it was asked about its tools, and then `login_path`,
+`missing_tools`, and `missing_git` are what it said, as in [Checking a
+runner](runners.md#checking-a-runner). `host_free_bytes` is the free space it
+measured on the volume holding its Skram data, absent when it did not measure
+it (an older Skram there), never zero in its place. A hello before a job of a
+project that uses Docker (and `runner check` or `doctor` for a runner such a
+project defaults to) also measures the runner's Docker engine (see [the Docker
+engine](config.md#the-docker-engine)): `docker_answered` is whether it
+answered, `docker_engine` its name (`Docker Desktop`, `OrbStack` or `Docker
+Engine`), `docker_context` the `docker` context it was reached through,
+`docker_error` its error line when it did not answer, and `docker_free_bytes`
+the free space inside its storage. They are from the last hello that asked
+about the engine, and `docker_at` is when that was: a later hello that did not
+ask keeps them. Each is absent when no hello has measured it, and for an
+unreachable runner. `skram runner list --json` carries the same fields for
+each runner, and its plain output shows them as the `LAST PROBE`, `FREE DISK`
+and `DOCKER` columns.
 
 While the queue is on hold, `queue` carries a `hold` as well:
 
@@ -290,21 +319,20 @@ Input:
 
 `project` and `target` are required and come from `discover`. `args` are
 handed to the target verbatim. `on_error` is `stop` — if this job fails,
-cancel the items still pending in its lanes — or `continue`, which is
-two-way: it also means this item, while still pending, survives a `stop`
-from a failure ahead of it in its lane. Left out, the queue's own setting
-applies. `checkout` runs the target in another checkout
-of the project's repo — a worktree or another clone — instead of its
-configured path; absolute, or relative to the directory the server was
-started in (never the caller's, since MCP has no notion of "your cwd").
-Left out, `run` uses the configured path, same as no `-C` on the CLI. A
-`checkout` that is not a checkout of the project's repo is refused, naming
-the project's repo and configured path. `env` is an object of variables for
-this job alone, the same as `--env NAME=VALUE` on the CLI: set last, over the
-project's `env:` and the server's environment, and refused when a name is not
-an environment name or is one of the project's
-[inputs](config.md#inputs) (see
-[per-job variables](how-it-works.md#per-job-variables---env)).
+cancel the items still pending in its lanes — or `continue`, which is two-way:
+it also means this item, while still pending, survives a `stop` from a failure
+ahead of it in its lane. Left out, the queue's own setting applies. `checkout`
+runs the target in another checkout of the project's repo — a worktree or
+another clone — instead of its configured path; absolute, or relative to the
+directory the server was started in (never the caller's, since MCP has no
+notion of "your cwd"). Left out, `run` uses the configured path, same as no
+`-C` on the CLI. A `checkout` that is not a checkout of the project's repo is
+refused, naming the project's repo and configured path. `env` is an object of
+variables for this job alone, the same as `--env NAME=VALUE` on the CLI: set
+last, over the project's `env:` and the server's environment, and refused when
+a name is not an environment name or is one of the project's
+[inputs](config.md#inputs) (see [per-job
+variables](how-it-works.md#per-job-variables---env)).
 
 `runner` sends the job to another machine, as `--runner` does on the CLI: the
 name of an entry in the config's `runners:` (`local` runs it here). Left
@@ -314,17 +342,18 @@ target with a named runner is refused. `wait`, `logs`, and `explain` then work
 as for any job. See [Runners](runners.md).
 
 On a target in the project's [`ledger:`](config.md#ledger) whose trees,
-target, and args already have a green job, nothing is queued and the result
-is the skip report the CLI's `run --json` prints: `skipped: true`, the green
+target, and args already have a green job, nothing is queued and the result is
+the skip report the CLI's `run --json` prints: `skipped: true`, the green
 `job_id`, `green_at`, `age_seconds`, and the `wait`, `explain`, and `force`
 commands. `force: true` runs it anyway, as `--force` does (see [skipping a
-proof that already passed](how-it-works.md#skipping-a-proof-that-already-passed-ledger)).
+proof that already
+passed](how-it-works.md#skipping-a-proof-that-already-passed-ledger)).
 `need_greens: N` skips only once the key has N consecutive greens since its
 last red, as `--need-greens` does; each call queues at most one job. Pending
 and running jobs of the key count toward N: once the greens plus those reach
 it, nothing is queued and the result is `in_flight: true` with
-`in_flight_items` and a `wait` command for the oldest (see
-[consecutive greens and flakes](how-it-works.md#consecutive-greens-and-flakes---need-greens)).
+`in_flight_items` and a `wait` command for the oldest (see [consecutive greens
+and flakes](how-it-works.md#consecutive-greens-and-flakes---need-greens)).
 
 For a project with [inputs](config.md#inputs) — other repos its targets
 read — pass `checkouts` instead: a list of directories, one per repo,
@@ -367,16 +396,15 @@ The call returns as soon as the item is queued. It does not wait:
 `lane_pending` is how many items are already waiting in this one's lanes;
 `queue_eta_seconds` adds the remainder of whatever is running there. `wait` is
 the shell command that does what the `wait` tool does. Call `wait` with
-`item_id` next. A `checkout` field, the checkout's absolute path, appears
-here and in every later report naming this item or job (`wait`, `status`,
+`item_id` next. A `checkout` field, the checkout's absolute path, appears here
+and in every later report naming this item or job (`wait`, `status`,
 `explain`, `logs`) when the call named one; it is absent for a job in the
 configured path. A project with inputs carries an `inputs` field the same
-shape as the CLI's — keyed by variable, each with `repo`, `dir` (the
-checkout the job read), and `default` — in this same set of reports; see
-[inputs](config.md#inputs) for the full shape. It is absent for a project
-with none.
-An `env` field, the variables the call gave, appears in the
-same reports the same way and is absent when the call gave none.
+shape as the CLI's — keyed by variable, each with `repo`, `dir` (the checkout
+the job read), and `default` — in this same set of reports; see
+[inputs](config.md#inputs) for the full shape. It is absent for a project with
+none. An `env` field, the variables the call gave, appears in the same reports
+the same way and is absent when the call gave none.
 
 While the queue is held, the same call still succeeds — the item is queued —
 and says so:
@@ -436,9 +464,21 @@ Input, all optional:
 
 `ref` is an item id (`q_…`) or a job id (`J…`). With no `ref` it waits for the
 whole queue; with `resource` it waits for one lane instead (a resource name,
-or `<resource>@<runner>`), and `ref` and `resource` cannot both be given. `timeout_seconds` defaults to 1800 and is
-capped at 3600; a good choice is `run`'s `estimate_seconds` doubled, at least
-600.
+or `<resource>@<runner>`), and `ref` and `resource` cannot both be given.
+`timeout_seconds` defaults to 1500 (25 minutes) and is capped at 1500, so the
+call always returns before an MCP client gives up on a tool that has sent
+nothing (Claude Code aborts one after 30 minutes). A larger value is capped, and
+the result names the limit it used as `timeout_seconds`, with
+`timeout_capped: true`. A job longer than that takes more than one call: see
+the `timeout` row below. The `skram wait` command is unchanged and takes any
+`--timeout`.
+
+When the request carries a progress token, `wait` sends a progress
+notification every 30 seconds while it blocks. Its `message` names the item's
+phase (`pending`, `waiting_for_runner`, `waiting_for_lease`, or what a running
+job is doing: `checking`, `shipping`, `preparing`, `running`, `homing`) and the
+seconds elapsed in the call, for example `shipping, 90s elapsed`. A request
+without a token gets none.
 
 Output for an item that finished:
 
@@ -456,6 +496,10 @@ Output for an item that finished:
 }
 ```
 
+A job with an artifacts archive (the project's
+[`artifacts:`](config.md#artifacts-and-artifacts_limit)) adds `"artifacts"`,
+its path in the job directory; the key is absent when there is none.
+
 `status` is one of:
 
 | `status` | What happened |
@@ -464,13 +508,15 @@ Output for an item that finished:
 | `failed` | it ran and exited non-zero; `exit_code` is the target's own |
 | `cancelled` | the item never ran; `cancelled_by` says who or what withdrew it |
 | `killed` | the job was stopped while it was running, by `skram kill` or any other signal; `exit_code` is 137 |
-| `timeout` | `timeout_seconds` elapsed and it is still going |
+| `timeout` | `timeout_seconds` elapsed and it is still going: call `wait` again with the same `ref` |
 
 A timeout is not a failure and not an error — the job is still going, and
-calling `wait` again is the right response. An item still waiting for its
-runner to answer, or for a lease on it, carries `waiting_for_runner` or
-`waiting_for_lease`; that is expected, so wait again rather than queueing it a
-second time:
+calling `wait` again with the same `ref` is the right response, never `run`
+again. The result carries `still_running: true`, `phase` (as above),
+`elapsed_seconds` (spent in this call), and a `message` saying to call `wait`
+again. An item still waiting for its runner to answer, or for a lease on it,
+carries `waiting_for_runner` or `waiting_for_lease`; that is expected, so wait
+again rather than queueing it a second time:
 
 ```json
 {
@@ -479,7 +525,12 @@ second time:
   "job_id": "J20260921_200346_9df790",
   "project": "apps",
   "target": "deploy",
-  "status": "timeout"
+  "status": "timeout",
+  "timeout_seconds": 1500,
+  "still_running": true,
+  "phase": "shipping",
+  "elapsed_seconds": 1500,
+  "message": "still running: call wait again with ref q_6a2071c8; do not run it again (shipping, 1500s elapsed)"
 }
 ```
 
@@ -551,11 +602,48 @@ Output for a job that failed:
 }
 ```
 
-`reason` is the classifier's verdict — `test_failure`, `compilation`,
-`dependency`, `docker_build`, `k8s_rollout` and so on, or for a job sent to a
-runner `runner_unreachable`, `runner_refused`, `runner_lost`, or
-`runner_declined` — and `reason_detail` is the line it keyed on. `tail_stream` is `stderr` when the job wrote any and
-`all` when it did not.
+`reason` is the classifier's verdict on what the target printed, or what Skram
+found before or around it. The classifier reads the last 200 lines of each
+stream against one ordered list of rules, and the first rule with a matching
+line wins:
+
+| Reason | Matched on |
+|---|---|
+| `disk_full` | `no space left on device` (also set before the job starts, when the machine is short of disk: its host disk, or the Docker engine's storage for a project that uses Docker) |
+| `docker_down` | `Cannot connect to the Docker daemon`, `failed to connect to the docker API`, `Docker Desktop is unable to start` (also set before the job starts, when the Docker engine of a project that uses Docker does not answer) |
+| `test_failure` | a test runner's summary: Playwright's `N failed`, Jest's or Vitest's `Tests: N failed`, pytest's `=== N failed … ===`, Go's `--- FAIL:` or `FAIL <package> <time>`; else `AssertionError` or `N tests failed` |
+| `script_error` | a missing command or module (`command not found`, pnpm's `Command "…" not found`, `Cannot find module`), then a shell syntax error, `No such file or directory`, `bad interpreter`, make's `No rule to make target` |
+| `dependency` | Go module and npm/pnpm fetch errors, `could not resolve host`, `TLS handshake timeout`, `connection reset by peer` |
+| `image_pull` | `ErrImagePull`, `ImagePullBackOff`, `pull access denied`, `manifest unknown` |
+| `k8s_rollout` | `exceeded its progress deadline`, `CrashLoopBackOff`, `error: timed out waiting for the condition` |
+| `lint` | a linter's summary or finding: golangci-lint, ESLint, flake8/ruff, RuboCop, Prettier, `vet:` |
+| `compilation` | a compiler's `file:line:col:` error (Go, C, Java, Swift), `undefined: …`, TypeScript's `error TS…`, rustc's `error[E…]`, `SyntaxError` |
+| `docker_build` | `failed to solve:` |
+| `permission` | `permission denied`, `access denied`, `EACCES`, `operation not permitted` |
+| `unknown` | nothing matched |
+
+Rules match whole words or a line's start, so a log that only mentions
+`expected`, `lint` or `tsc` in passing is not classified by them. Reasons
+Skram sets itself: for a job sent to a runner `runner_unreachable`,
+`runner_refused`, `runner_lost`, or `runner_declined`; `setup_failed` when
+the project's `setup:` target failed before the target started;
+`missing_tool` when a command the project's `tools:` names was not on that
+machine's `PATH` and the target never started; `disk_full` when the machine
+it would start on was short of disk before it began; `checkout_removed`
+when the checkout was gone before the job started; `start_failed` for a job
+that ended before its target ran; and `signal` for one killed by a signal
+from outside `skram kill`. `disk_full`, `docker_down`, `missing_tool`,
+`setup_failed` and `start_failed` say the machine was unfit, not that the
+branch is wrong: a job that fails with one is recorded neither green nor red
+on a [ledgered](how-it-works.md#skipping-a-proof-that-already-passed-ledger)
+target.
+
+`reason_detail` is the line the rule matched; for `test_failure`, the test
+runner's summary line when it printed one. For `unknown` it is the last line
+that looks like an error (`error`, `fatal`, `failed`, `panic`), else the last
+stderr line; for `start_failed`, the error that stopped it. `tail_stream` is
+`stderr` when the job wrote any and `all` when it did not. `artifacts` is the
+job's artifacts archive, absent when it has none.
 
 A job still running explains itself too, with the estimate and how to follow
 or stop it:
