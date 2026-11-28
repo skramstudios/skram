@@ -5,6 +5,190 @@ follow semver.
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-11-27
+
+Jobs can read secrets by name, a target can name the inputs it reads, and a
+resource can carry values from one job to the next. A project can show its
+Grafana dashboards. The agent rules are now short, and jobs start and finish
+sooner.
+
+What changes on upgrade:
+
+- `secrets:` and `--secret` need a `skram-vault` with `secret env` on the
+  `PATH` of the machine that queues the job. Without one, a job that names a
+  secret fails at once as `missing_secret`; jobs that name none are unaffected.
+- A runner that is asked to take secrets needs this release too; an older one
+  is refused as `runner_refused`.
+- `skram agent install-rules` now also runs `skram-vault agent install-rules`,
+  `skram-tunnel agent install-rules` and `skram-chat agent install-rules`,
+  each when it is on `PATH` (an absent one is skipped with a note). Run it to
+  refresh a checkout's rules, which are now at most 60 lines.
+- Naming `docker` in a project's `tools:` is what makes Skram check the Docker
+  engine before each job and start a stopped one; `skram explain` and
+  `skram doctor` now say so when Docker fails in a project that does not.
+- Setting `SKRAM_SSH` turns off the shared SSH connection to runners.
+- Nothing else needs a config edit: a target you do not list under
+  `target_inputs:` reads every input, as before.
+
+### New
+
+- **Jobs can read secrets by name.** A project's `secrets: [namespace/NAME, …]`
+  and `skram run --secret namespace/NAME` (MCP `run`: `secrets`) are resolved
+  by `skram-vault`, which Skram finds on its own `PATH`, and exported to the
+  target under `NAME`. A job sent to a runner has its secrets resolved on the
+  machine that queues it; a workflow step gets its project's secrets like any
+  job. Skram keeps only the name: the value is blanked from the job's output,
+  status and ledger as `‹secret:NAME›`, and a PEM key's `-----BEGIN-----` and
+  `-----END-----` lines are left as they are. A secret that does not resolve,
+  resolves empty, or takes longer than two minutes fails the job at once as
+  `missing_secret`, an environment reason that leaves a ledgered target's
+  streak alone. A secret may not be named like a variable Skram sets itself
+  (`PATH`, `HOME`, `SKRAM_*`, `HERDR_*`). An ephemeral target runs without a
+  job, so it gets no secrets and `--secret` on one is refused. The `secrets:`
+  key is in the configuration reference.
+
+- **A runner job gets its secrets over SSH, and nothing is written there.**
+  They travel inside the SSH session and live only in memory on the runner
+  (see "Secrets on a runner" in the runners guide). A runner whose Skram is too
+  old to take them is refused as `runner_refused`, with a hint to upgrade it.
+
+- **`--env` warns when a value looks like a secret.** A value `skram-vault` has
+  handed out, or one shaped like a key or token, still queues the job but
+  prints a warning on stderr naming the variable and pointing to `--secret`
+  (`warnings` in `--json` and MCP `run`). `skram explain` re-run lines repeat
+  the job's `--secret` names beside its `--env` flags.
+
+- **`target_inputs:` says which inputs a target reads.** A project can list,
+  per target, the input variables that target uses. Its jobs then report, key
+  the ledger on, and check drift for only those; the others are still exported
+  at their default checkout, and a missing default no longer stops the run. A
+  target you do not list reads every input, as before. See `docs/config.md`.
+
+- **Lane values.** A project that sets `lane_values: <resource>` gives its jobs
+  a file named by `$SKRAM_LANE_ENV`. A target writes `KEY=VALUE` lines there
+  (a key it just minted, say) and Skram keeps them for that resource: every
+  later job on it, from any project or checkout on this machine, starts with
+  those variables set. A later write of the same key replaces it, `KEY=`
+  removes it, and a job that writes nothing changes nothing. Values are
+  blanked in the logs of the jobs that receive them, and `status` and
+  `explain` show names and which job wrote them, never values. A job sent to a runner
+  takes part too: what it writes is kept for that resource on that runner,
+  and later jobs sent there start with it, passed in memory and never written
+  to the runner's disk. A job here does not see a runner's values, nor the
+  reverse.
+
+  `skram discover` (and `--json`) shows each listed target's inputs, the
+  target tables `skram agent install-rules` writes gain an Inputs column for a
+  project that uses `target_inputs:`, and `skram doctor` warns about a
+  `target_inputs:` key that names no target.
+
+- **A job on a runner receives only the inputs its target reads.** With
+  `target_inputs:`, the other inputs' repos are not sent to the runner and their
+  variables are not set there.
+
+- **One command refreshes every tool's agent rules.** After its own section,
+  `skram agent install-rules` runs `skram-vault agent install-rules` and
+  `skram-tunnel agent install-rules`, then `skram-chat agent install-rules`,
+  each when it is on `PATH` (a missing one is a one-line note), with your `--repos`, `--here`, `--check` and
+  `--config`; `--projects` narrows Skram only. Each tool's output has its own
+  heading, and the command exits non-zero when any of them does, after all have
+  run. `--check --json` prints one document, with a `siblings` list and an `ok`
+  that covers all four. Use releases of those tools that exit 0 where they
+  have nothing of their own to write: with one that does not, this command
+  fails there. See the agent setup guide.
+
+- **Project dashboards in Grafana.** A project can set
+  `metrics.dashboards: <folder>` (relative to its `path:`). `skram metrics up`
+  mounts the folder read-only into the host Grafana as a folder named after the
+  project and prints a line per project mounted; every dashboard file under it,
+  at any depth, appears in that one Grafana folder. Edits to the files show up
+  in about 30 seconds. A folder that is missing, is a file, or leaves the
+  project's path is a warning, not a failure. `skram doctor` reports each
+  declared folder as found, or as an issue. The metrics docs now name the ports
+  (9090, 3100) and datasource uids (`prometheus`, `loki`) such dashboards and
+  pushes rely on. See `docs/config.md`.
+
+- **A Docker failure says how to get the engine started.** When a job fails because Docker stopped answering and its project does not name `docker` in `tools:`, `skram explain` names that line, which makes skram check the engine before each job and start a stopped Docker Desktop or OrbStack once. `skram doctor` says the same when the engine is down and no project that runs on this machine declares it. See `docs/config.md`.
+
+### Changed
+
+- **The agent rules are short, and the rest is read on demand.** What
+  `skram agent install-rules` writes into a checkout (and the MCP server
+  serves as `skram://guide`) is now at most 60 lines instead of about 230. The
+  rules about the ledger, failure reasons, runners, job files and configuration
+  moved to topics: `skram rules` lists them, `skram rules <topic>` prints one,
+  and the MCP server serves each as `skram://rules/<topic>`. Run
+  `skram agent install-rules` to refresh a checkout. `skram explain` now tells
+  an agent, for every failure caused by the machine (`disk_full`,
+  `docker_down`, `missing_tool`, `missing_secret`, `setup_failed`,
+  `start_failed`), not to enqueue the job again and to report the machine to
+  you.
+
+- **JSON reports show the job's command as you would type it.** `status`,
+  `queue list`, `run`, the dashboard, and the MCP tools no longer put the
+  queue's own flags (`--foreground`, `--_job-id`, a leading `--config <file>`)
+  in a `command` field. `explain --json` gains `command` and `rerun`: the
+  job's line, and the full line to run it again with its `--env` and
+  `--secret` flags, so a caller no longer strips a prefix off a `next` hint.
+
+- **Short jobs return sooner.** A job queued while another lane is busy starts
+  at once instead of up to 5 s later, and `run -f` and `wait` notice a job's
+  start and end within tens of milliseconds instead of half a second. A
+  trivial `skram run <project> <target> -f` takes about 0.1 s instead of 0.5 s.
+
+- **Runner jobs start faster.** Skram's calls to a runner now share one SSH
+  connection (`ControlMaster`, kept 60 s), so a short job on a runner spends
+  about a second less on logins. Setting `SKRAM_SSH` turns this off: your
+  program is run exactly as before.
+
+### Fixed
+
+- **Secrets follow `--config`.** Running skram with `--config X` now makes it hand the same file to `skram-vault` when it resolves a job's secrets, so a job under a non-default config no longer fails `missing_secret` with "config file not found".
+
+- **`skram tui` runs a scoped target.** Launch now works out each target's
+  inputs on its own, so a target that does not read an input with no checkout
+  here is no longer refused, and standing in a checkout of an input a target
+  does not read no longer exports it.
+
+- **A target defined only in a worktree is scoped by that worktree.**
+  `target_inputs:` looked the target up in the configured checkout's file, so a
+  worktree-only target read every input; the CLI and MCP now agree.
+
+- **A skipped or in-flight run shows the command you would type.** The
+  `--json` report no longer carries the internal `--foreground` flag.
+
+- **A job lost before it came home still leaves its lane values.** They are
+  recorded when the runner is next reached, and no copy stays on disk.
+
+- **A `-C` refused for an input the target does not read** now says so in one
+  sentence and names the inputs the target does read.
+
+- **`skram agent install-rules` gets its exit code right.** A run whose
+  checkouts all have no projects now succeeds instead of failing with "no
+  artifacts were installed", and a file that cannot be written or removed now
+  makes the command exit non-zero even when other files were written.
+  `--here` now works in every checkout a plain run visits, including a linked
+  worktree of a `repos:` entry that has only `paths:`, no projects, and no
+  origin; outside git it says the directory is not inside a git checkout.
+
+- **A shallow clone can be sent to a runner.** A job reading a repo with a
+  shallow submodule (or a shallow checkout or input) failed before it started
+  with git's `shallow update not allowed`. It now runs, with nothing to do on
+  the runner first. A `git push` the runner rejects is reported as `runner_refused` with
+  git's message, no longer as `runner_unreachable`.
+
+- **An artifacts archive holds only the files its job wrote.** A file the
+  project's `artifacts:` globs match but that was last modified before the
+  job started (a report an earlier job left in the checkout) is left out, so
+  a job that writes no report no longer packs the last one again.
+
+- `skram explain` re-run lines now repeat the job's `--env` flags, so pasting
+  one reruns the job with the same environment instead of silently dropping it.
+
+### Documentation
+
+- **The record leads the docs.** The README, the agent setup page, the MCP tool descriptions and the rules say what each job keeps (the commit each checkout and input was on) and that `explain` on a green job gives its env, checkouts and `rerun` line. A new recipe covers picking up where the last session stopped.
+
 ## [0.23.0] — 2026-11-24
 
 Runners get the checkout's submodules, a setup step, a phase you can watch,

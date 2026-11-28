@@ -173,6 +173,54 @@ build, or a cluster bring-up must run every time it is asked for, so it never
 belongs here. An ephemeral target on the list is ignored: it has no job to
 record.
 
+### `lane_values:`
+
+Keep what a target produces for its resource, and hand it to every later job
+there.
+
+```yaml
+projects:
+  cluster:
+    path: ~/dev/cluster
+    script: ops.sh
+    resource: kind-dev
+    lane_values: kind-dev
+```
+
+Default: unset. Nothing is recorded and no job gets `$SKRAM_LANE_ENV`. The
+value is one of the project's [resources](#resource). Each non-ephemeral job
+of the project on this machine gets `$SKRAM_LANE_ENV`, a file path. A target
+that mints something every later job needs, such as an API key an `up`
+rotates, writes `KEY=VALUE` lines to it:
+
+```bash
+echo "API_KEY=$new_key" >> "$SKRAM_LANE_ENV"
+```
+
+When the job ends, whatever its exit code, Skram records each line against
+the resource and deletes the file. A later line for the same key replaces
+it, `KEY=` with nothing after it removes it, and a job that writes nothing
+changes nothing. A key that is not an environment variable name, or one
+Skram reserves (`SKRAM_*`, `HERDR_*`, `PATH`, `HOME`), is dropped with a
+warning in the job's log.
+
+Every later job on that resource, from any project and any checkout on this
+machine, starts with the recorded variables in its environment. A variable
+the job's own `env:`, an input, `--env`, or a secret already sets is left as
+that says. The values are blanked in the receiving job's log, and `skram
+status` lists each resource's value names with the job, target and checkout
+that wrote them, never the values. Ephemeral targets neither write nor
+receive them.
+
+A job sent to a [runner](runners.md) takes part on that runner's own lane
+(`kind-dev@mbp2`): its `$SKRAM_LANE_ENV` comes home with the job and is
+recorded here, and later jobs sent to the same runner start with those
+variables, passed in memory like secrets and never written to the runner's
+disk (Skram names them to the job's process in `SKRAM_LANE_NAMES` and removes
+that variable before the target runs). The runner must be new enough to take secrets in memory, or the job is
+refused before anything is sent. Jobs here and jobs on a runner keep separate
+values.
+
 ### `setup:`
 
 The target that installs what a cold checkout needs, run first in every
@@ -238,6 +286,54 @@ through the MCP server. Values are literal: nothing inside them is expanded.
 One run can override a value for itself alone with
 [`skram run --env NAME=VALUE`](how-it-works.md#per-job-variables---env),
 which is set after `env:` and wins.
+
+### `secrets:`
+
+Secrets a project's jobs receive by name, never by value.
+
+```yaml
+projects:
+  my-app:
+    path: ~/dev/my-app
+    script: ops.sh
+    secrets: [my-app/STRIPE_TEST_KEY, my-app/TS_OAUTH_CLIENT_SECRET]
+```
+
+Default: empty. Each entry is `<namespace>/<NAME>`: a lowercase namespace
+(`[a-z0-9][a-z0-9-]*`) and a `NAME` that is an environment variable name. Just
+before a job's `setup:` and target start, Skram runs `skram-vault secret env
+<names> --json` on the machine that queues the job (found on Skram's own
+`PATH`, not the job's; Skram never reads the secret store itself) and exports
+each value to the setup and the target under its bare `NAME`, after `env:` and
+the inputs. A job sent to a runner is resolved here too, and each step of a
+workflow gets its project's secrets.
+`skram run --secret NAMESPACE/NAME` adds names for one run, and the MCP `run`
+tool takes `secrets`; both join the project's list. An ephemeral target runs
+without a job, so it runs without secrets (the project's `secrets:` are not
+given to it) and `--secret` on one is refused.
+
+Skram keeps the name and never the value: the queue item and `status.json`
+carry names only, the stored command carries neither, and every resolved value
+is blanked from the job's output wherever Skram writes it (`raw.log`, events,
+the terminal, `status`, `explain`, the ledger), each exact occurrence becoming
+`‹secret:NAME›`. Blanking works line by line, and a value shorter than 8
+characters is blanked only where it stands as a whole word. A multi-line value
+(a PEM key) is blanked whole and line by line, except its `-----BEGIN …-----`
+and `-----END …-----` lines. A value that a
+target transforms (base64, a prefix cut off) is not recognised.
+
+A name that is not `<namespace>/<NAME>`, two names with one `NAME`, and a
+`NAME` that is also a key of the project's `env:`, one of its
+[inputs](#inputs), or the run's `--env`, or a variable Skram sets itself
+(`PATH`, `HOME`, `SKRAM_*`, `HERDR_*`), are refused, naming both, when the
+config loads or the run is made. If a name does not resolve or resolves to an
+empty value, or `skram-vault` is missing from Skram's `PATH`, too old to have
+`secret env`, or silent for two minutes, the job fails at
+once with reason `missing_secret`: the detail names the secret, the machine,
+and what `skram-vault` said (its `next` line is the fix), and neither the
+setup nor the target starts. Like the other environment reasons it records
+nothing on a [ledgered](#ledger) target. A job sent to a runner gets its
+secrets too: see [Secrets on a runner](runners.md#secrets-on-a-runner).
 
 ### `inputs:`
 
@@ -365,6 +461,44 @@ default the label is the same as for a project without inputs. `status`,
 [herdr](herdr.md) sidebar all use this label; `explain` also lists every
 input with its directory and default under `Inputs:`.
 
+
+### `target_inputs:`
+
+By default every target of a project reads every input. A project can say
+which a target reads:
+
+```yaml
+projects:
+  my-app:
+    inputs: {LIB_DIR: my-lib, E2E_DIR: my-e2e}
+    target_inputs:
+      test: [E2E_DIR]     # test reads one input
+      lint: []            # lint reads none
+```
+
+A target listed here reads only those inputs: its job resolves, records,
+reports, keys its ledger on, and checks drift and `checkout_removed` for those
+alone. A target not listed reads every input, exactly as before.
+
+- The other inputs are still exported to the child at their default checkout
+  (`VAR` and `SKRAM_INPUT_<VAR>_DEFAULT`), so a script that names one keeps
+  working. One with no checkout on this machine is not exported, and
+  does not stop the run.
+- Standing in a checkout of an input the target does not read binds nothing.
+  `-C` naming one is refused, naming the inputs the target reads.
+- On a runner, only the inputs the target reads are sent, and only those
+  variables are set there; the others' repos never reach the runner.
+- A workflow step scopes by its own target; the workflow's record is the union
+  of what its steps read.
+- The loader refuses a name that is not one of the project's inputs, or one
+  listed twice. A key that names no target of the project scopes nothing (the
+  target does not exist); `skram doctor` warns about it, and `skram discover`
+  prints it as a note.
+- `skram discover --json` gives each listed target an `inputs` list (`[]` for
+  none); an unlisted target has no `inputs` key. `skram discover` prints
+  `[reads LIB_DIR]` beside it.
+- `--env` is still refused for every input's variable, read or not.
+
 ### `runner:`
 
 ```yaml
@@ -394,7 +528,9 @@ projects:
 The commands this project's targets need, as bare command names (`pnpm`, not
 a path); a path or a shell word is a config error naming the project and the
 entry. Empty by default. Unlike a runner's own [`tools:`](#runners), which
-only warns, these are a requirement.
+only warns, these are a requirement. Naming `docker` is also what arms the
+Docker engine check before each job and the one start of a stopped Docker
+Desktop or OrbStack; a project that runs Docker without naming it gets neither.
 
 Before a job of the project starts, Skram looks each one up on the `PATH` the
 job will have, on the machine it starts on: this machine's (the queue's own
@@ -427,8 +563,8 @@ projects:
 ```
 
 Files a job makes that you want to keep: test traces, reports, logs. When a
-job ends, whatever its status, the files these globs match are packed into
-one archive, `artifacts.tar.gz`, at the top of its [job
+job ends, whatever its status, the files these globs match and the job wrote
+are packed into one archive, `artifacts.tar.gz`, at the top of its [job
 directory](how-it-works.md#a-job-on-disk), each at its path relative to the
 project's directory. A job stopped by `skram kill` or another signal is
 packed too.
@@ -437,8 +573,10 @@ Each entry is a glob relative to the project's directory in the checkout the
 job ran in: the directory its script or Makefile runs in (`*`, `?`, and `[…]`,
 one path segment each). A match that is a directory brings every file under
 it. Symlinks are never followed, and a match that resolves outside that
-directory is left out. Member names in the archive are relative to it too. No
-match writes no archive.
+directory is left out. A file last modified before the job started is left
+out too: a report an earlier job left in the checkout is that job's, not this
+one's. Member names in the archive are relative to it too. No match writes no
+archive.
 
 `artifacts_limit` caps the archive (default `500MB`; units `KB`, `MB`, `GB`,
 `TB` are binary, so `1MB` is 1048576 bytes, and a bare number is bytes).
@@ -454,6 +592,31 @@ prints it on an `Artifacts:` line; each leaves it out when there is none.
 
 `artifacts:` applies to a `skram run <project> <target>` job. A
 [workflow](#workflows) job does not pack its steps' projects' artifacts.
+
+### `metrics:`
+
+```yaml
+projects:
+  web:
+    path: ~/src/web
+    script: ops.sh
+    metrics:
+      dashboards: monitoring/dashboards   # relative to path:
+```
+
+`metrics.dashboards` names a folder of Grafana dashboard JSON files in the
+project's checkout, relative to `path:`. `skram metrics up` mounts it
+read-only into the host Grafana, which shows it as a folder named after the
+project (`web` above). Every dashboard file under it, at any depth, appears in
+that one Grafana folder; subfolders do not become folders of their own. Grafana
+reads the files straight from the checkout, so an edit shows up within about 30
+seconds without running `up` again; adding or removing the key takes another
+`metrics up`. The folder always comes from `path:`, never from a worktree or
+`-C` checkout. An absolute path, one that leaves `path:`, a project name with a
+`/`, or two projects naming the same folder is a config error. A folder that is
+not there, is a file, or is a symlink out of `path:` is a warning on stderr and
+is skipped; `up` still succeeds. It is the only key under `metrics:`. See [The metrics
+stack](how-it-works.md#project-dashboards).
 
 ### `e2e:`
 

@@ -274,7 +274,7 @@ that is not there.
 | Declaring runners makes the queue spread jobs | Nothing picks a runner. A job goes where `--runner` or its project's `runner:` says, else it runs here. To use three machines, enqueue three jobs: see [Splitting a suite across runners](#splitting-a-suite-across-runners). |
 | You run `skram`, or the tests, on the runner | Enqueue, `wait`, and read logs here only. Nothing needs a login on the runner after setup. |
 | The runner uses its own checkout of the project | Its own checkouts are never read. The job runs in a worktree Skram keeps, on the exact commit sent. See [Where things live on a runner](#where-things-live-on-a-runner). |
-| Installs, `.env` files, and build output come along | Files git ignores never leave this machine. The job installs what it needs; pass values with `--env`. |
+| Installs, `.env` files, and build output come along | Files git ignores never leave this machine. The job installs what it needs; pass values with `--env`, and secrets by name (see [Secrets on a runner](#secrets-on-a-runner)). |
 | An ephemeral target can go to a runner | It always runs here, and `--runner` on one is refused. See [Sending a job](#sending-a-job). |
 | A workflow's steps can go to runners | A workflow's steps run here. |
 | Any machine can be a runner | It must have this machine's OS and CPU architecture, or the job fails as `runner_refused`. |
@@ -339,6 +339,26 @@ uncommitted changes on top of `head`, in the checkout or in one of its
 submodules, and when it is `false`, `commit` is `head`. A checkout with
 submodules adds `submodules`, below.
 
+### Secrets on a runner
+
+A job sent to a runner receives its [`secrets:`](config.md#secrets) and
+`--secret` names like a local one, and the runner keeps nothing. This machine
+runs `skram-vault` before anything is sent, so a secret that does not resolve
+fails the job here as `missing_secret`, with no call to the runner and the
+detail naming this machine. The values then travel inside the SSH session
+that starts the job and live only in the memory of the job's process and the
+target's environment: no file on the runner holds one, not the job's config,
+its `status.json`, its logs, or what comes home, where each appears as
+`‹secret:NAME›`. The runner never runs `skram-vault`, needs no vault, and has
+nothing to clean up when the job ends. The job's own environment never shows
+`SKRAM_SECRET_NAMES`, the list of names Skram sets to tell the job's process
+that its values arrived this way, and removes at once.
+
+A runner whose Skram is too old to take secrets this way is refused before
+anything is sent, as `runner_refused`; the detail says to upgrade Skram there.
+A job whose copy of Skram is replaced first (see
+[What goes to the runner](#what-goes-to-the-runner)) never meets this.
+
 ### Submodules
 
 A submodule initialised in the checkout travels as the checkout does, from
@@ -349,6 +369,17 @@ the submodule in the checkout's worktree to it. A submodule inside a
 submodule goes the same way. The runner never fetches: it needs no network
 access and no credentials for a submodule's remote. Files git ignores in a
 submodule stay here, as in the checkout.
+
+Shallow clones ship. A submodule cloned at `--depth 1` (or `shallow = true`
+in `.gitmodules`) needs no `git fetch --unshallow` first, and neither does a
+shallow checkout of the project or of an input: the runner's clone takes the
+history your clone has. A job there sees no more history than that. The
+runner's clone also remembers where the history stopped, so a later job from a
+full clone of the same repo runs as usual, but `git log` or `git describe` in
+its runner worktree may stop at the same place. To have the full history sent
+again, remove both `repos/<repo>.git` and `worktrees/<repo>` there (see
+[Where things live on a runner](#where-things-live-on-a-runner)) while none of
+its jobs runs.
 
 The runner's worktree mirrors your checkout. A submodule with uncommitted
 changes makes the job's `sent` `dirty`, so a [ledgered](config.md#ledger)
@@ -549,8 +580,9 @@ answers. If the connection dropped after the start was sent, the job may
 have started there anyway: when Skram next reaches the runner it kills that
 job before sending the item again, and leaves its files on the runner. If
 the runner answers but the job still cannot be sent there (its disk is full,
-say), the job fails as `runner_unreachable` with the last error, rather than
-waiting again.
+say), the job fails with the last error rather than waiting again: as
+`runner_refused` when the runner rejected the `git push`, else as
+`runner_unreachable`.
 
 ```bash
 skram status                                # "Waiting for a runner:" names the item, the runner, and since when
@@ -593,7 +625,7 @@ way to run it here instead:
 
 | Reason | Meaning |
 |---|---|
-| `runner_refused` | The runner cannot take the job as things stand, and retrying would not help: another OS or architecture, a runner no longer in `runners:`, a checkout with nothing to send, or a copied binary that will not run there. Nothing ran. |
+| `runner_refused` | The runner cannot take the job as things stand: another OS or architecture, a runner no longer in `runners:`, a checkout with nothing to send, a copied binary that will not run there, a job with secrets for a runner whose Skram cannot take them, or a `git push` the runner rejected (`reason_detail` has git's message). Nothing ran. |
 | `runner_unreachable` | The runner answered, but a call there kept failing before the job started. Nothing ran. |
 | `runner_lost` | The job started, but contact was lost and every reattach failed. It may still be running there. |
 | `runner_declined` | The runner's owner set `accept_runner_jobs: false` there (see [Declining runner jobs](#declining-runner-jobs)). Nothing ran, and nothing was retried. |
@@ -765,8 +797,14 @@ It must log in without a prompt (a key, an agent, or Tailscale SSH) and run
 the command in the runner's shell, as `ssh` does. Your `~/.ssh/config`
 applies, so a `Host` alias works as a runner name. With `SKRAM_SSH` unset,
 Skram runs `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5
--o ServerAliveCountMax=3 <destination> <command>`: it never prompts, gives up
-on a connect after 10 s, and notices a dead connection in about 15 s. A
+-o ServerAliveCountMax=3 -o ControlMaster=auto -o ControlPath=<dir>/%C
+-o ControlPersist=60s <destination> <command>`: it never prompts, gives up
+on a connect after 10 s, notices a dead connection in about 15 s, and shares
+one connection per runner, so the calls of a job after the first skip the
+login (about 0.06 s instead of 0.2 s each). `<dir>` is `ssh/` in Skram's data
+directory, or `/tmp/skram-<uid>` when that path is too long for a socket
+(macOS allows 104 bytes); if neither is a private directory of yours, no
+sharing options are added. A
 program you set in `SKRAM_SSH` is run exactly as above, with nothing added.
 Point `SKRAM_SSH` at a wrapper to add options, or to test a setup without
 a second machine.

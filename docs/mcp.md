@@ -29,13 +29,13 @@ followed by one line per project and a pointer to the resources:
 ```text
 ## Shared-resource jobs (skram)
 
-… the rules: the loop, what to do when the queue is held, ephemeral
-targets, the guard, where a job's files are …
+… the short rules: the loop, what to do when the queue is held, the guard,
+what to read on demand (`skram://rules/<topic>`) …
 
 Projects and targets (typical duration from history; [ephemeral] runs immediately):
 - apps: build (build the image, ~1s) · deploy (roll the new image out, ~12s) · status (print what is running) [ephemeral] · test (run the test suite)
 
-Read skram://projects/<name> for a project's full target table and skram://guide for the rules in detail.
+Read skram://projects/<name> for a project's full target table and skram://rules/<topic> (ledger, reasons, runners, files, config) for the rules in detail.
 ```
 
 Which projects are listed depends on the directory the client started the
@@ -152,7 +152,7 @@ Output, with one job running and one item waiting behind it:
     {
       "job_id": "J20260921_200346_9df790",
       "pid": 65170,
-      "command": "--config /home/you/.config/skram/config.yaml run --foreground apps deploy --foreground --_job-id J20260921_200346_9df790",
+      "command": "run apps deploy",
       "project": "apps",
       "target": "deploy",
       "actor": "claude-code",
@@ -172,7 +172,7 @@ Output, with one job running and one item waiting behind it:
   ],
   "most_recent": {
     "id": "q_a71bf5ae",
-    "command": "run --foreground apps deploy",
+    "command": "run apps deploy",
     "project": "apps",
     "target": "deploy",
     "actor": "claude-code",
@@ -332,7 +332,11 @@ variables for this job alone, the same as `--env NAME=VALUE` on the CLI: set
 last, over the project's `env:` and the server's environment, and refused when
 a name is not an environment name or is one of the project's
 [inputs](config.md#inputs) (see [per-job
-variables](how-it-works.md#per-job-variables---env)).
+variables](how-it-works.md#per-job-variables---env)). `secrets` is a list of
+secret names (`NAMESPACE/NAME`) for this job alone, the same as `--secret` on
+the CLI: they join the project's [`secrets:`](config.md#secrets), are resolved
+by `skram-vault` on the machine that queues the job, and never travel in the
+queue as values; an ephemeral target refuses them.
 
 `runner` sends the job to another machine, as `--runner` does on the CLI: the
 name of an entry in the config's `runners:` (`local` runs it here). Left
@@ -380,7 +384,7 @@ The call returns as soon as the item is queued. It does not wait:
   "item_id": "q_6a2071c8",
   "project": "apps",
   "target": "deploy",
-  "command": "run --foreground apps deploy",
+  "command": "run apps deploy",
   "actor": "claude-code",
   "pending": 1,
   "resources": ["docker"],
@@ -586,6 +590,8 @@ Output for a job that failed:
   "status": "failed",
   "exit_code": 1,
   "duration_ms": 16,
+  "command": "run apps test",
+  "rerun": "skram run apps test",
   "reason": "test_failure",
   "reason_detail": "FAIL: 1 test failed",
   "tail_stream": "all",
@@ -601,6 +607,12 @@ Output for a job that failed:
   "job_dir": "/home/you/.local/share/skram/logs/J20260921_200400_c8e8d2"
 }
 ```
+
+`command` is the job's line as a caller would type it after `skram`, and `rerun`
+is the whole line to run it again, repeating the job's `--env` and `--secret`
+flags and its runner. Both are there for a job in any state. Every `command` in
+Skram's JSON reports has the same form: it never shows flags the queue adds
+itself, such as `--foreground`.
 
 `reason` is the classifier's verdict on what the target printed, or what Skram
 found before or around it. The classifier reads the last 200 lines of each
@@ -628,12 +640,13 @@ Skram sets itself: for a job sent to a runner `runner_unreachable`,
 `runner_refused`, `runner_lost`, or `runner_declined`; `setup_failed` when
 the project's `setup:` target failed before the target started;
 `missing_tool` when a command the project's `tools:` names was not on that
-machine's `PATH` and the target never started; `disk_full` when the machine
+machine's `PATH` and the target never started; `missing_secret` when a secret
+the job names did not resolve and the target never started; `disk_full` when the machine
 it would start on was short of disk before it began; `checkout_removed`
 when the checkout was gone before the job started; `start_failed` for a job
 that ended before its target ran; and `signal` for one killed by a signal
 from outside `skram kill`. `disk_full`, `docker_down`, `missing_tool`,
-`setup_failed` and `start_failed` say the machine was unfit, not that the
+`missing_secret`, `setup_failed` and `start_failed` say the machine was unfit, not that the
 branch is wrong: a job that fails with one is recorded neither green nor red
 on a [ledgered](how-it-works.md#skipping-a-proof-that-already-passed-ledger)
 target.
@@ -778,11 +791,12 @@ what was wrong and what the valid values were, rather than an empty answer:
 
 ## Resources
 
-Two kinds, both `text/markdown`:
+Three kinds, all `text/markdown`:
 
 | URI | What it is |
 | --- | --- |
-| `skram://guide` | the agent rules: the loop, backing off when the queue is held, ephemeral targets, the guard, where a job's files live. Byte for byte the text `install-rules` writes into a checkout. |
+| `skram://guide` | the short agent rules (60 lines at most), byte for byte what `install-rules` writes into a checkout. |
+| `skram://rules/<topic>` | the rules an agent needs only at a certain moment, one resource per topic: `ledger`, `reasons`, `runners`, `files`, `config`. `skram rules <topic>` prints the same text. |
 | `skram://projects/<name>` | one project's full target table |
 
 Every configured project is listed as its own resource, and

@@ -71,7 +71,9 @@ skram agent install-rules --check      # write nothing; exit 1 if anything is mi
 ```
 
 `--projects a,b` narrows to the checkouts where those projects apply, and
-`--repos x,y` to the checkouts of those `repos:` entries. Every checkout
+`--repos x,y` to the checkouts of those `repos:` entries. (The other tools the
+same command runs, [below](#one-command-for-skram-skram-vault-skram-tunnel-and-skram-chat),
+take `--repos` too, but never `--projects`.) Every checkout
 carries its linked worktrees along automatically — a `git worktree add`
 sibling, one nested inside the checkout, or any other linked worktree gets
 the same two files, with no extra config; narrowing applies to them the same
@@ -79,13 +81,24 @@ way. A worktree whose directory has been removed but not pruned from git is
 skipped without a line.
 
 ```text
+== skram ==
   /home/you/dev/apps
     OK   AGENTS.local.md
     OK   CLAUDE.local.md
     OK   .git/info/exclude
 
 Installed 3 artifact(s) (engine v0.13.0).
+
+skram-vault: not on PATH, skipped
+
+skram-tunnel: not on PATH, skipped
+
+skram-chat: not on PATH, skipped
 ```
+
+A checkout where no project applies gets no Skram section: it is listed with a
+`SKIP` line, and that is not a failure. A file that cannot be written or removed
+gets an `ERROR` line and the command exits 1, however many others succeeded.
 
 Three files, and **none of them is committed**:
 
@@ -107,12 +120,79 @@ machine-specific — so `--check` compares bytes and gives the same answer on
 every machine:
 
 ```text
+== skram ==
 Agent rules current (engine v0.13.0): 3 artifact(s) checked.
 ```
 
 An edited or out-of-date file makes it print the difference and exit 1, and
 `skram doctor` reports the same thing as one line per checkout. Re-run
 `install-rules` to fix it.
+
+### One command for Skram, Skram Vault, Skram Tunnel, and Skram Chat
+
+[Skram Vault](https://github.com/skramstudios/skram-vault),
+[Skram Tunnel](https://github.com/skramstudios/skram-tunnel), and
+[Skram Chat](https://github.com/skramstudios/skram-chat) keep their own sections in the same files. After writing or checking its own,
+`skram agent install-rules` runs `skram-vault agent install-rules`, then
+`skram-tunnel agent install-rules`, then `skram-chat agent install-rules`, so
+one command after any upgrade refreshes all four.
+Each tool still writes and checks only its own section and lines.
+
+- A tool is found on Skram's own `PATH`. One that is not there gets a one-line
+  note and counts as success.
+- It runs in your current directory with your environment, and what it prints
+  appears under a `== skram-vault ==`, `== skram-tunnel ==`, or `== skram-chat ==`
+  heading.
+- It gets `--repos`, `--here`, and `--check` as you gave them, and `--config`
+  (made absolute) when you gave Skram one. `--projects` narrows Skram only: the
+  other tools run without it.
+- The command exits non-zero when any of the four does; under `--check`, that
+  is a difference reported by any of them. One tool failing does not stop the
+  others.
+- When Skram cannot make sense of what you asked for, nothing runs and nothing
+  is written: a config it cannot read, an unknown project or repo name,
+  `--here` outside git or in a checkout Skram does not know, or a selection
+  that matches no checkout.
+
+A tool's exit code alone decides whether it passed or failed, so each tool has
+to exit 0 where it has nothing of its own to write. With a release of any
+of them that exits non-zero there instead, this command fails too; upgrade that
+tool. With `--check --json`, Skram also puts what each tool printed into its
+document.
+
+With `--check --json`, standard output is one document: Skram's report, in
+which `ok` covers all four tools, and a `siblings` list. Standard error is
+passed through. Here Skram Vault reports a difference and Skram Tunnel and
+`skram-chat` are not installed:
+
+```json
+{
+  "ok": false,
+  "engine": "v0.13.0",
+  "checked": 3,
+  "differences": [],
+  "siblings": [
+    {
+      "tool": "skram-vault",
+      "found": true,
+      "exit_code": 1,
+      "report": { "ok": false }
+    },
+    { "tool": "skram-tunnel", "found": false, "exit_code": 0 },
+    { "tool": "skram-chat", "found": false, "exit_code": 0 }
+  ]
+}
+```
+
+| Key in `siblings` | What it holds |
+| --- | --- |
+| `tool` | `skram-vault`, `skram-tunnel`, or `skram-chat` |
+| `found` | whether it is on Skram's `PATH` |
+| `exit_code` | its exit code; `-1` when it could not start or a signal ended it |
+| `report` | the JSON object it printed, as it printed it (the one above is cut short) |
+| `error` | without a report, what it said instead; absent when it succeeded and said nothing |
+
+`--json` without `--check` changes nothing: a write prints the same text.
 
 **If the checkout has an `AGENTS.md` and no `CLAUDE.md`:** Claude Code's
 documentation says a `CLAUDE.local.md` makes it stop reading `AGENTS.md`
@@ -287,6 +367,50 @@ It flows through everything: the item, the job's `status.json`, `by_actor` in
 `skram status`, `cancelled_by` on a cancelled item, and the `actor` on a hold.
 The queue's processor exports the enqueuing actor into each job, so a job's
 own status names whoever asked for it, not the processor.
+
+## The rules an agent reads on demand
+
+The rules `install-rules` writes are short, at most 60 lines: the loop, the
+guard, what `held`, `still_running`, `skipped` and `in_flight` mean, and what to
+do after a failure. The rest is read only when it is needed, one topic at a
+time: `ledger`, `reasons`, `runners`, `files`, and `config`.
+
+```bash
+skram rules              # the topics, one line each
+skram rules reasons      # one topic, as markdown
+```
+
+An unknown topic exits 1 and names the topics. The MCP server serves the same
+text as `skram://rules/<topic>`. When a job fails because the machine was unfit
+(`disk_full`, `docker_down`, `missing_tool`, `missing_secret`, `setup_failed`,
+`start_failed`), `explain`'s `next` tells the agent not to enqueue it again and
+to report the machine and `reason_detail` to you.
+
+## Picking up where the last session stopped
+
+A new session needs no hand-off if the queue's record is read first. Two calls
+answer "what is deployed?" and "how did the last green run?":
+
+```bash
+skram status --json            # most_recent: the last job, with each checkout's and input's head
+skram explain q_6aa510b2 --json   # any past item: env, checkouts, rerun
+```
+
+`most_recent.inputs.<VAR>.head` is the commit that input was on at enqueue
+(`head_at_start` when the job began), and `checkout` names the project's own
+when it ran outside its configured path. Compare it with where the repo is now
+(`git diff --stat <head> HEAD`); when nothing that the target reads has
+changed, skip the rebuild.
+
+`explain` works on a green job as well as a red one. Its `env` lists the
+variables the job was given with `--env`, `checkout` and `inputs` the directory
+each repo resolved to (with its head), and `rerun` is the whole line, `--env`
+and `-C` flags included, so sending it again reproduces the job instead of
+approximating it. Run that line, then
+`skram wait <item> --json --timeout auto`. The estimate that comes back from
+`run --json` says what it rests on, for example "~11m38s (from 3 runs ·
+exact)": the number of runs, and whether the history matched the exact line, only
+its target, or only the project.
 
 ## Exit codes
 

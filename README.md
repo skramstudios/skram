@@ -54,8 +54,19 @@ Two projects, two callers, one cluster: the second run waited its turn.
   the job's own code, so an agent never polls. `--queue` waits for everything,
   `--resource` for one lane, `--timeout auto` takes its deadline from the
   estimate.
+- **The tree each job ran.** Every job keeps the commit each checkout and
+  input was on when it was enqueued and when it started, so "what is deployed,
+  and from which tree?" is a lookup, not a guess:
+
+  ```bash
+  skram status --json    # most_recent.inputs.API_DIR.head → 1edac92040
+  git -C ../api diff --stat 1edac92040 HEAD   # a doc comment only: skip the rebuild
+  ```
 - **`explain`.** After a failure: the status, the classified reason, the tail
-  of what the job printed, and the commands to run next.
+  of what the job printed, and the commands to run next. On a green job it is
+  the way to reproduce it: the env, every checkout, and `rerun`, the line that
+  sends it again. [Picking up where the last session stopped](docs/agent-setup.md#picking-up-where-the-last-session-stopped)
+  is the recipe.
 
 `--json` everywhere and a hook that blocks the raw build command are table
 stakes: pueue had `--json` and `wait` years ago, and the editors' own hook
@@ -169,9 +180,11 @@ for an item cancelled before it ran, and `137` for one that was killed.
 `skram mcp` serves the same commands over MCP with the same JSON, and
 `skram agent install-rules` writes the rules into each checkout as a
 machine-local `AGENTS.local.md` that is never committed, so it works in a
-repository you cannot change. [Agent setup](docs/agent-setup.md) is the whole
-path — server at user scope, files, guard, exit codes — and
-[MCP](docs/mcp.md) is the tool-by-tool reference.
+repository you cannot change. When Skram Vault, Skram Tunnel, or `skram-chat` is installed,
+the same command refreshes its section too.
+[Agent setup](docs/agent-setup.md) is the whole path — server at user scope,
+files, guard, exit codes — and [MCP](docs/mcp.md) is the tool-by-tool
+reference.
 
 ## Sharing a resource with your agents
 

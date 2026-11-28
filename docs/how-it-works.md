@@ -50,8 +50,8 @@ Every job gets a directory named after its job id, under the logs directory
   status.json    the job's record: command, project, target, actor, PID,
                  checkout, when it was queued (queued_at), started, and
                  ended, exit code, duration, failure reason
-  artifacts.tar.gz   the files the project's artifacts: globs matched when
-                 the job ended, when it has any (see config.md)
+  artifacts.tar.gz   the files the project's artifacts: globs matched and
+                 the job wrote, when it has any (see config.md)
 ```
 
 The job id is the date and time the job started plus a random suffix, so a
@@ -70,7 +70,7 @@ skram logs J20260921_194852_f1fca4     # raw.log for one job
 skram logs -F                          # follow the newest job's raw.log
 skram logs <job-id> --json             # events.jsonl instead, one object per line
 skram status                           # running and recent jobs, from status.json
-skram explain <item-or-job>            # status, reason, stderr tail, what to run next
+skram explain <item-or-job>            # status, reason, stderr tail, what to run next; env, checkouts and rerun on any job
 ```
 
 Nothing cleans them up on its own. `skram prune` removes old job directories,
@@ -312,6 +312,13 @@ environment the job inherits, the project's [`env:`](config.md#env), and its
 inputs, so a per-run value beats a configured one of the same name. An
 `--env` after a bare `--` is the target's own argument and is passed through.
 
+`--env` is for settings, not credentials: its values are stored with the item.
+When a value is one skram-vault has handed out, or looks like a key or token,
+`run` still queues the job but warns (a stderr line, or a `warnings` array in
+`--json` and MCP `run`) naming the variable and pointing to
+[`--secret`](#secrets-for-one-job---secret). Explain's re-run line repeats the
+job's `--secret` names beside its `--env` flags.
+
 A value with no `=`, an empty name, or a name that is not an environment
 name (`^[A-Za-z_][A-Za-z0-9_]*$`) is refused, naming the argument, before
 anything is queued. So is a variable that is one of the project's
@@ -325,6 +332,15 @@ so anyone reading the job can tell what it was given. The field is absent
 when no `--env` was passed. The stored command never carries them: the
 queued child reads them from its item. They take no part in lanes or
 estimate keys, so a job with `--env` shares its target's history.
+
+### Secrets for one job: `--secret`
+
+`--secret NAMESPACE/NAME` gives one job a secret by name, on top of the
+project's [`secrets:`](config.md#secrets). It repeats, before or after the
+project and target, is read from the machine the job starts on, and is
+exported to the target under `NAME`; the value is never stored (see
+[`secrets:`](config.md#secrets)). A name that is also an `--env` key is
+refused. Pass the name only; a value never belongs on the command line.
 
 ## Lanes, and the rule for an item with two resources
 
@@ -501,7 +517,7 @@ the checkout or inside any git submodule initialised in it. A
 job whose script fails on clean trees is recorded red; a killed or cancelled
 job, or one whose runner was lost, is neither. So is a job that failed with an
 environment reason (`disk_full`, `docker_down`, `missing_tool`,
-`setup_failed`, `start_failed`), whether Skram found it before the target
+`missing_secret`, `setup_failed`, `start_failed`), whether Skram found it before the target
 started or the classifier read it in the job's output: the machine was unfit,
 not the branch, so the key's streak and flakes stay as they were and `skram
 explain`'s `ledger` section says nothing was recorded. Fix the machine, then
@@ -881,6 +897,37 @@ or not at all. Everything else about the stack is yours to decide. The URLs
 `metrics up` prints afterwards assume Grafana on 3333, Prometheus on 9090, and
 Loki on 3100, so those are the ports to publish if you want the printed links
 to work.
+
+### Project dashboards
+
+A project can bring its own Grafana dashboards. Set `metrics.dashboards` on it
+(see [`metrics:`](config.md#metrics)) and `skram metrics up` bind-mounts that
+folder read-only into the Grafana service, which shows it as a folder named
+after the project. Every dashboard file under the folder, at any depth, appears
+in that one Grafana folder. `up` prints one `dashboards <project> <folder>` line
+per project it mounted, and a warning on stderr for a declared folder it
+cannot mount. It writes the mounts to `compose.override.yml`, and one Grafana
+provider per project to `grafana-dashboards/`, in `~/.local/share/skram/metrics/`,
+and runs compose with your file and that override; with no project declaring
+dashboards there is neither, and compose runs on your file alone.
+
+Your compose file must name the Grafana service `grafana` and mount its
+provisioning directory at `/etc/grafana/provisioning`, with a `dashboards`
+directory in it: the override mounts the generated providers over that
+directory, and each project's folder at
+`/etc/grafana/project-dashboards/<project>`.
+
+The contract a project's dashboards and its metric and log pushes rely on:
+
+| What | Value |
+|---|---|
+| Prometheus remote write | host port 9090, `/api/v1/write` |
+| Loki push | host port 3100, `/loki/api/v1/push` |
+| Grafana datasource uid for Prometheus | `prometheus` |
+| Grafana datasource uid for Loki | `loki` |
+
+Dashboards should query those two uids; Skram knows nothing else about what a
+project's dashboards show.
 
 Nothing else in Skram depends on any of this. The job records the stack would
 read are the same ones `skram status`, `skram logs`, and `skram explain`
